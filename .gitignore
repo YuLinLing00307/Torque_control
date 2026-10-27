@@ -1,0 +1,9 @@
+.workbuddy/
+Objects/
+Listings/
+*.o
+*.d
+*.crf
+*.axf
+*.uvguix.*
+*.uvoptx
