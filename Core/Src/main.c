@@ -20,12 +20,15 @@
 #include "main.h"
 #include "can.h"
 #include "dma.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_user.h"
+#include "app_nj70.h"
+#include "app_joint.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -93,22 +96,24 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USART1_UART_Init();
   MX_CAN_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-	HAL_UARTEx_ReceiveToIdle_DMA(&huart2, rx_buffer, sizeof(rx_buffer));
-	__HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_HT);
-	Bsp_Can_Init();
-	Joint_Init(1);
+	Bsp_Can_Init();    
+	Dev_Joint_Init(1); 
+	Dev_NJ70_Init(rx_buffer, MAX_RX_BUFFER_SIZE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-		tx_proc();
-		rx_proc();
-		led_proc();
-		Joint_Task();
-		//test_proc();
+		App_Led_Task();
+		App_Key_Task();
+		App_NJ70_Task();
+		App_Joint_Task();
+		App_Joint_Adm_Task();        /* 导纳环：启动状态机 + PP 换点 + 看门狗（ISR 只做递推）*/
+		//App_Joint_GravScan_Task();   /* PP 8 点扫角，重拟合重力矩时用 */
+		
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

@@ -1,0 +1,22 @@
+{
+  "name": "open_loop_force_control",
+  "display_name": "开环力控",
+  "version": "0.0.3",
+  "description": "设置驱动器的开环力控功能。",
+  "icon": "icons.svg",
+  "interface": {
+    "file": "main.py",
+    "interface": "Interface"
+  },
+  "widgets": [
+    {
+      "file": "force_app_widget.py",
+      "widget": "ForceAppWidget",
+      "position": "dialog",
+      "config": {
+      }
+    }
+  ],
+  "requirements": [
+  ]
+}

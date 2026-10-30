@@ -1,0 +1,33 @@
+{
+  "系统反馈": {
+    "位置当前值": {"index": "0x6064", "sub_index": "0x00"},
+    "霍尔传感器数据": {"index": "0x3677", "sub_index": "0x00"},
+    "ADC1当前值": {"index": "0x358B", "sub_index": "0x00"},
+    "ADC2当前值": {"index": "0x358C", "sub_index": "0x00"},
+    "电流当前值": {"index": "0x6078", "sub_index": "0x00"},
+    "U相电流": {"index": "0x3668", "sub_index": "0x01"},
+    "V相电流": {"index": "0x3668", "sub_index": "0x02"},
+    "W相电流": {"index": "0x3668", "sub_index": "0x03"},
+    "母线电压": {"index": "0x6079", "sub_index": "0x00"},
+    "数字输入IO": {"index": "0x60FD", "sub_index": "0x00"}
+  },
+  "系统输入": {
+    "目标位置": {"index": "0x60FD", "sub_index": "0x00"},
+    "脉冲输入计数": {"index": "0x35F0", "sub_index": "0x00"}
+  },
+  "系统状态变量": {
+    "位置规划值": {"index": "0x6062", "sub_index": "0x00"},
+    "速度规划值": {"index": "0x606B", "sub_index": "0x00"},
+    "力矩规划值": {"index": "0x6074", "sub_index": "0x00"},
+    "速度观测器实际速度": {"index": "0x3604", "sub_index": "0x00"},
+    "电角度当前值": {"index": "0x3674", "sub_index": "0x00"},
+    "插值周期当前值": {"index": "0x3675", "sub_index": "0x01"},
+    "位置误差": {"index": "0x60F4", "sub_index": "0x00"}
+  },
+  "系统输出": {
+    "U相电压": {"index": "0x357B", "sub_index": "0x01"},
+    "V相电压": {"index": "0x357B", "sub_index": "0x02"},
+    "W相电压": {"index": "0x357B", "sub_index": "0x03"},
+    "数字输出IO": {"index": "0x60FE", "sub_index": "0x01"}
+  }
+}

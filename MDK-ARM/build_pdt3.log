@@ -1,0 +1,9 @@
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\Keil_v5\ARM\ARMCC\Bin'
+Build target 'Torque_control'
+compiling dev_joint.c...
+..\Drivers\Devices\dev_joint.c(438): error:  #20: identifier "NMT_PREOP_NODE" is undefined
+  uint8_t Dev_Joint_NmtPreOp(uint8_t node)     { return nmt_send(NMT_PREOP_NODE, node); }
+..\Drivers\Devices\dev_joint.c: 0 warnings, 1 error
+"Torque_control\Torque_control.axf" - 1 Error(s), 0 Warning(s).
+Target not created.
+Build Time Elapsed:  00:00:01

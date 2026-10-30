@@ -1,0 +1,22 @@
+{
+  "name": "status_word_analysis",
+  "display_name": "状态字分析",
+  "version": "0.0.1",
+  "description": "根据状态字的具体数值进行位分析。",
+  "icon": "status.svg",
+  "interface": {
+    "file": "main.py",
+    "interface": "Interface"
+  },
+  "widgets": [
+    {
+      "file": "status_word_analysis.py",
+      "widget": "StatusWordAnalysisWidget",
+      "position": "dialog",
+      "config": {
+      }
+    }
+  ],
+  "requirements": [
+  ]
+}

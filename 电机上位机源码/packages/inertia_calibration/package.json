@@ -1,0 +1,22 @@
+{
+  "name": "inertia_calibration",
+  "display_name": "惯量校准",
+  "version": "0.0.1",
+  "description": "在完成机械特性辨识后进行惯量校准。",
+  "icon": "inertia_calibration_icon.svg",
+  "interface": {
+    "file": "main.py",
+    "interface": "Interface"
+  },
+  "widgets": [
+    {
+      "file": "inertia_calibration_widget.py",
+      "widget": "InertiaCalibrationDialog",
+      "position": "dialog",
+      "config": {
+      }
+    }
+  ],
+  "requirements": [
+  ]
+}

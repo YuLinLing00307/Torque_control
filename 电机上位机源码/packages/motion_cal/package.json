@@ -1,0 +1,22 @@
+{
+  "name": "motion_cal",
+  "display_name": "电机运动计算",
+  "version": "0.0.1",
+  "description": "根据电机参数、分辨率参数评估电机相关运动性能。",
+  "icon": "motion_cal_icon.svg",
+  "interface": {
+    "file": "main.py",
+    "interface": "Interface"
+  },
+  "widgets": [
+    {
+      "file": "motion_measure_widget.py",
+      "widget": "MotionMeasureDialog",
+      "position": "dialog",
+      "config": {
+      }
+    }
+  ],
+  "requirements": [
+  ]
+}

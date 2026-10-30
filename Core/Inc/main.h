@@ -35,10 +35,12 @@ extern "C" {
 #include "usart.h"
 #include "gpio.h"
 #include "can.h"
+#include "tim.h"
 #include "stdint.h"
 #include "stdlib.h"
 #include "stdio.h"
 #include "string.h"
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -64,10 +66,14 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define KEY0_Pin GPIO_PIN_4
+#define KEY0_GPIO_Port GPIOE
+#define LED1_Pin GPIO_PIN_5
+#define LED1_GPIO_Port GPIOE
 #define RS485_RE_Pin GPIO_PIN_7
 #define RS485_RE_GPIO_Port GPIOD
-#define LED_Pin GPIO_PIN_5
-#define LED_GPIO_Port GPIOB
+#define LED0_Pin GPIO_PIN_5
+#define LED0_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

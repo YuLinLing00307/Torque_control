@@ -1,0 +1,8 @@
+{
+  "5000": {"division_factor": 1, "signals": "5KHz_2450Hz_1996_int","bandwidth": 2450},
+  "8000": {"division_factor": 1, "signals": "8KHz_3500Hz_1996_int","bandwidth": 3500},
+  "10000": {"division_factor": 1, "signals": "10KHz_4000Hz_1996_int","bandwidth": 4000},
+  "15625": {"division_factor": 2, "signals": "7_8125KHz_3800Hz_1996_int","bandwidth": 7600},
+  "16000": {"division_factor": 2, "signals": "8KHz_3500Hz_1996_int","bandwidth": 7600},
+  "20000": {"division_factor": 2, "signals": "10KHz_4000Hz_1996_int","bandwidth": 8000}
+}

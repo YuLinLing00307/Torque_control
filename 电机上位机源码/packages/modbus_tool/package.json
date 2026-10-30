@@ -1,0 +1,22 @@
+{
+  "name": "modbus_tool",
+  "display_name": "Modbus调试工具",
+  "version": "0.0.1",
+  "description": "根据状态字的具体数值进行位分析。",
+  "icon": "serial_tasks.svg",
+  "interface": {
+    "file": "main.py",
+    "interface": "Interface"
+  },
+  "widgets": [
+    {
+      "file": "modbus_setting_widget.py",
+      "widget": "ModbusSettingWidget",
+      "position": "dialog",
+      "config": {
+      }
+    }
+  ],
+  "requirements": [
+  ]
+}

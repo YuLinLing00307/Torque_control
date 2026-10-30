@@ -1,0 +1,33 @@
+{
+  "status_word_analysis": {
+    "enabled": true
+  },
+
+  "identification_signal_download": {
+    "enabled": false
+  },
+
+  "modbus_tool": {
+    "enabled": true
+  },
+
+  "parameter_table": {
+    "enabled": true
+  },
+
+  "motion_cal": {
+    "enabled": true
+  },
+  "open_loop_force_control": {
+    "enabled": true
+  },
+  "factory_settings": {
+    "enabled": false
+  },
+  "batch_configuration_import": {
+    "enabled": false
+  },
+  "inertia_calibration": {
+    "enabled": true
+  }
+}

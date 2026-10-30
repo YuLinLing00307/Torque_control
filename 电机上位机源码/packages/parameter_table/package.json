@@ -1,0 +1,22 @@
+{
+  "name": "parameter_table",
+  "display_name": "参数列表",
+  "version": "0.0.1",
+  "description": "驱动器所有参数列表，可以加载参数、发送参数。",
+  "icon": "parameter_icon.svg",
+  "interface": {
+    "file": "main.py",
+    "interface": "Interface"
+  },
+  "widgets": [
+    {
+      "file": "parameter_widget.py",
+      "widget": "ParameterListWidget",
+      "position": "dialog",
+      "config": {
+      }
+    }
+  ],
+  "requirements": [
+  ]
+}

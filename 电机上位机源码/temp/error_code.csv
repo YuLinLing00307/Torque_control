@@ -1,0 +1,272 @@
+错误代码,说明,注释,原因,Reason,处理办法,Handler,附件
+0x3210,DC_link_over_voltage_DS_402,总线过压,"1.母线电压超过驱动器保护阈值
+2.因为频繁加减速，电机反向电动势导致母线过压","1.The bus voltage exceeds the driver protection threshold.
+2.The reverse electromotive force of the motor causes the bus overvoltage due to frequent acceleration and deceleration.","1.提高硬件电压输入最大值，但最大值受到驱动器硬件规格限制
+2.减小加（减）速度，降低频繁加减速节拍
+3.增加再生电阻，开启再生功能，设置合理的开管和关管电压
+4.电源处增加制动模块","1.Increase the maximum value of the hardware voltage input, but the maximum value is limited by the driver's hardware specifications.
+2.Reduce the acceleration (deceleration) rate to reduce the frequency of acceleration and deceleration.
+3.Increase the regenerative resistor, enable the regenerative function, and set reasonable turn-on and turn-off voltages for the switch.
+4.Add a brake module at the power supply.",
+0x3220,DC_link_under_voltage_DS_402,总线欠压,1. 驱动器供电电源电压不足，低于硬件电压输入最小值,1.The power supply voltage of the driver is insufficient and below the minimum value of the hardware voltage input.,"1.提高DC电源供电母线电压
+2.如果是交流驱动器则为硬件电源模块损坏，返厂维修","1. Increase the voltage of the DC power supply bus
+2. If it is an AC driver, the hardware power module is damaged. Return it to the factory for repair",
+0x3230,Load_error_DS_402,电机过载,1.电机运行当前电流（q轴电流）超过电机额定电流，且累计热量超过设定的电机最大热量值（最大热量由电机过载电流持续时间与电流积分确定）,1.The motor is operating with a q-axis current that exceeds the rated current and the accumulated heat has exceeded the maximum heat value set for the motor (maximum heat is determined by the duration of the motor overload current and the integral of the current).,"1.增大电机过载电流持续时间（参数设置->保护限制->电流保护设置），需要确保电机的散热条件良好，能够长期运行电机温度稳定且不超过电机允许运行温度，用户根据实际电机散热情况确定
+2.减小加（减）速度，降低频繁加减速节拍，可以减少加速过程中的电流","1. To increase the duration of motor overload current (Parameter setting -> Protection Limit -> Current Protection Setting), it is necessary to ensure that the heat dissipation condition of the motor is good, and the temperature of the motor is stable for long-term operation and does not exceed the allowable operating temperature of the motor, which can be determined by the user according to the actual heat dissipation condition of the motor
+2. Reduce the acceleration (deceleration) speed and reduce the frequent acceleration and deceleration rhythm, which can reduce the current in the acceleration process",
+0x3331,Field_circuit_interrupted_DS_402,电机动力线缺相,1.电机动力线  U、V、W  存在接触不良，漏接情况,"1. There is poor contact or disconnection in the power lines U, V, and W of the motor.",1.检查电机动力线是否接好，使用万用表测量电机动力线到驱动器接线端子处是否导通,1. Check whether the motor power cable is properly connected. Use a multimeter to measure whether the motor power cable is properly connected to the driver wiring terminal,
+0x4110,Excess_ambient_temperature_DS_402,环境温度过高错误,1.设备温度超过 设定的设备最大温度,1. The equipment temperature exceeds the maximum temperature set for the equipment.,"1.提高设备温度最大值，但有受到硬件规格上限制约
+2.驱动器散热条件不佳，改善散热条件，增加风扇或者散热片
+3.减小加（减）速度，降低频繁加减速节拍","1. Increase the maximum temperature of the device, subject to the upper limit of the hardware specifications
+2. If the heat dissipation condition of the driver is poor, improve the heat dissipation condition and add a fan or heat sink
+3. Reduce the acceleration (deceleration) speed and reduce the frequent acceleration and deceleration rhythm",
+0x4120,Too_low_ambient_temperature_DS_402,环境温度过低错误,1.设备温度低于 设定的设备最小温度,1. The equipment temperature is lower than the minimum temperature set for the equipment.,"1.降低设备温度最小值，但有受到硬件规格上限制约
+2.环境温度太低，改善环境温度条件","1. Lower the minimum device temperature, subject to the upper limit of hardware specifications
+2. Improve the ambient temperature if the ambient temperature is too low",
+0x4310,Excess_temperature_drive_DS_402,驱动器过温保护,1.设备温度超过 设定的设备最大温度,1. The equipment temperature exceeds the maximum temperature set for the equipment.,"1.提高设备温度最大值，但有受到硬件规格上限制约
+2.驱动器散热条件不佳，改善散热条件，增加风扇或者散热片
+3.减小加（减）速度，降低频繁加减速节拍","1. Increase the maximum temperature of the device, subject to the upper limit of the hardware specifications
+2. If the heat dissipation condition of the driver is poor, improve the heat dissipation condition and add a fan or heat sink
+3. Reduce the acceleration (deceleration) speed and reduce the frequent acceleration and deceleration rhythm",
+0x4320,Too_low_temperature_drive_DS_402,驱动器低温保护,1.设备温度低于 设定的设备最小温度,1. The equipment temperature is lower than the minimum temperature set for the equipment.,"1.降低设备温度最小值，但有受到硬件规格上限制约
+2.环境温度太低，改善环境温度条件","1. Lower the minimum device temperature, subject to the upper limit of hardware specifications
+2. Improve the ambient temperature if the ambient temperature is too low",
+0x5441,External_inhibit_input_detected_DS_402,正、负极限开关同时触发错误,检测到正、负极限开关（传感器）状态在同一时刻同时生效,1. The limit switch (sensor) status of the positive and negative poles is detected to be active at the same time.,"1.检查正、负极限开关（传感器）信号线是否异常
+2.检查并合理安装正、负极限开关（传感器）位置","1. Check whether the signal cables of the positive and negative limit switch (sensor) are abnormal
+2. Check and properly install the positions of the positive and negative limit switches (sensors)",
+0x5510,Working_memory_DS_402,内存错误 参数存储故障,"1. 末端振动抑制功能参数设置错误
+2. 系统振动频率过低，无法使用末端振动抑制功能","1.The parameter setting for the end vibration suppression function is incorrect.
+2.The system vibration frequency is too low to use the end vibration suppression function.","1. 正确设置系统振动频率、系统振动阻尼比参数
+2. 如果系统振动频率低于1Hz，需要降低CSP模式控制频率","1. Correctly set the system vibration frequency and system vibration damping ratio parameters
+2. If the system vibration frequency is lower than 1Hz, reduce the CSP mode control frequency",
+0x5520,Program_memory_DS_402,硬件参数存储错误,"1. 固件版本降级，新版本新增功能参数，降级的版本
+2. 参数存储发生故障，硬件FLASH损坏
+3. CPU 正忙  无法处理参数存储","1.The firmware version has been downgraded and new function parameters have been added to the new version.
+2.The parameter storage has malfunctioned, and the hardware FLASH is damaged.
+3.The CPU is busy and unable to process parameter storage.","1. 硬件损坏，清楚错误后，点击保存参数依然报错，驱动器重新上电依然报错
+2. 软件升级版本不兼容，当软件版本发生较大改动时候出现，会在软件升级版本注意事项说明该版本升级会需要清楚存储错误，恢复出厂设置后使用
+3. 软件降级版本不兼容，原因同2","1. The hardware is damaged. If you click Save parameters and power on the drive, an error message is displayed
+2. The software upgrade version is incompatible. If the software version is greatly changed, it will be displayed in the software upgrade version
+3. The degraded software version is incompatible. The cause is the same as 2",
+0x7121,Motor_blocked_DS_402,电机堵转保护,"1. 电机电流持续大于 电机堵转电流阈值相对值（相对电机额定电流）且 电机实际转速低于 电机堵转速度阈值，持续电机堵转检测时间
+2. 当电机堵转电流阈值为0或者电机堵转速度阈值为0则该保护不生效","1. The motor current has been continuously higher than the relative threshold value of the motor stall current (relative to the rated current of the motor), and the actual motor speed has been lower than the threshold value for the motor stall speed, for a duration of continuous motor stall detection time.
+2. If the motor stall current threshold is 0 or the motor stall speed threshold is 0, this protection will not be activated.","1. 增大堵转时间，有些大惯量电机启动电流大
+2. 排除电机实际是否有堵转情况
+3. 磁极未对齐，电角度未对齐，进行电角度辨识（寻相）","1. Increase the blocking time, and some large inertia motors have large starting current
+2. Exclude whether the motor is actually blocked
+3. Magnetic pole is not aligned, electrical Angle is not aligned, electrical Angle identification (phase finding)",
+0x7303,Resolver_1_fault_DS_402,编码器1错误,1.绝对编码器1 0.5s内20次通讯错误,1.The absolute encoder 1 has had 20 communication errors within 0.5 seconds.,"1. 受到线路干扰，检查编码器屏蔽措施是否到位，推荐使用双绞屏蔽线
+2. 检查编码器设置参数是否正确
+3. 检查编码器接线是否正确，接线是否接触不良
+4. 编码器故障，检查编码器是否损坏
+5. 增量编码器报错则为硬件或者接线问题导致
+6. ABZ+Hall场景下ABZ断线恢复后需进行手动电角度辨识","1. If there is line interference, check whether the shielding measures of the encoder are in place. Twisted-pair shielding cables are recommended
+2. Check whether the parameters set for the encoder are correct
+3. Check whether cables to the encoder are properly connected and in poor contact
+4. The encoder is faulty. Check whether it is damaged
+5. If the incremental encoder reports an error, the error is caused by hardware or cable problems
+6. In the ABZ+Hall scenario, manual electrical angle identification is required after the ABZ disconnection is restored.",
+0x7304,Resolver_2_fault_DS_402,编码器2错误,1.绝对编码器2 0.5s内20次通讯错误,1. The absolute encoder 2 has had 20 communication errors within 0.5 seconds.,"1. 受到线路干扰，检查编码器屏蔽措施是否到位，推荐使用双绞屏蔽线
+2. 检查编码器设置参数是否正确
+3. 检查编码器接线是否正确，接线是否接触不良
+4. 编码器故障，检查编码器是否损坏
+5. 增量编码器报错则为硬件或者接线问题导致
+6. ABZ+Hall场景下ABZ断线恢复后需进行手动电角度辨识","1. If there is line interference, check whether the shielding measures of the encoder are in place. Twisted-pair shielding cables are recommended
+2. Check whether the parameters set for the encoder are correct
+3. Check whether cables to the encoder are properly connected and in poor contact
+4. The encoder is faulty. Check whether it is damaged
+5. If the incremental encoder reports an error, the error is caused by hardware or cable problems
+6. In the ABZ+Hall scenario, manual electrical angle identification is required after the ABZ disconnection is restored.",
+0x8100,Communication_DS_301,通讯错误,"1.link信号丢失，网线接触不良，input口
+2.IRQ中断连续丢失10次，即主站报文丢失，出现的时候，应该是出错轴及以后所有轴都会同时报错","1. The link signal is lost, the network cable is poorly connected, and the input port is affected.
+2. The main station message has been lost due to IRQ interrupts being lost 10 times in a row, and all axes from the faulty axis onwards will report an error.","1.检查驱动器PE是否连接良好，网线是否受到干扰
+2.总线多轴中，比如轴3报错，需要检查轴2 到轴3之间的网线连接是否良好。 ","1. Check whether the drive PE is properly connected and whether the network cable is interfered
+2. If an error occurs on multiple bus axes, for example, axis 3, check whether the network cable between axis 2 and axis 3 is properly connected.",
+0x8400,Velocity_speed_controller_DS_402,超过最大速度,"1. 开启速度最大限制开关后生效保护
+2. 电机实际转速超过设定的最大轮廓速度1.2倍（固件版本 6.1.13以下版本是超过电机最大速度就保护）
+","1. The protection is activated when the maximum velocity limit switch is turned on.
+2. The actual motor velocity exceeds 1.2 times the set maximum contour velocity (firmware version 6.1.13 or below activates protection when the motor velocity exceeds the maximum velocity).","1. 提高最大轮廓速度，速度设置关系为：最大电机转速>=最大轮廓速度>=目标速度。
+2. 编码器数据异常，导致速度计算超过最大轮廓速度","1. Increase the maximum profile speed. The speed setting relationship is: maximum motor speed >= maximum profile speed >= target speed.
+2. The data of the encoder is abnormal, causing the speed calculation to exceed the maximum contour speed",
+0x8611,Following_error_DS_402,跟随误差过大,位置控制误差超过跟随误差窗口，且持续跟随误差超时时间,"1. The position control error exceeds the tracking error window, and the tracking error exceeds the timeout time.","1. 检查接线是否正确
+2. 增大机械增益
+3. 调整位置跟随误差窗口
+4. 确保电机功率是否合适
+5. 检查是否在位置控制下发生堵转情况
+6. 检查编码器数据是否出现异常跳变
+7. 检查是否主站位置目标指令异常，加速度过大导致位置跟踪不上","1. Check whether cable connections are correct
+2. Increase mechanical gain
+3. Adjust the position following error window
+4. Ensure that the motor power is appropriate
+5. Check whether a lock-up occurs under position control
+6. Check whether the encoder data changes abnormally
+7. Check whether the target instruction of the master station position is abnormal, and the acceleration is too large, leading to the failure of position tracking",
+0xFF01,Electrical_identification_error_DS402,电气辨识错误,"1.电机动力线未接入、识别电阻电感错误产生负数
+","1. The power line of the motor is not connected, or the identification of the resistance and inductance is incorrect, resulting in a negative number.",1. 检查电机动力线有没有接好,1. Check whether the power line of the motor is properly connected,
+0xFF03,Inertia_identification_error_DS402,惯量辨识错误,"1.电机惯量过小 小于 1g*cm^2
+2.电机惯量过大 大于30倍惯量比，惯量辨识可能会失败或者不准确
+3.编码器方向错误，电机正方向与编码器方向相反，给定正力矩电流，电机负方向旋转
+4. 最大电机转速设置过大，远远超出电机实际最大速度能到达得值，在惯量辨识过程中无法达到设定  机械辨识速度相对值 * 最大电机速度
+5.惯量校准过程中，闭环时电流噪声明显大于开环电流采样噪声","1. The motor inertia is too small, less than 1 g*cm^2.
+2.The motor inertia is too large, more than 30 times the inertia ratio, and the inertia identification may fail or be inaccurate.
+3. The encoder direction is incorrect, the motor rotates in the opposite direction to the encoder, and a positive torque current is given, causing the motor to rotate in the negative direction.
+4. The maximum motor speed setting is too large, far exceeding the actual maximum speed that the motor can reach, and it cannot reach the set mechanical identification speed relative to the maximum motor speed during the inertia identification process.
+5.During the inertia calibration process, the noise of the closed-loop current is significantly greater than the noise of the open-loop current sampling.","1. 核对最大电机速度设置是否正确
+2. 加大转矩常数10倍,10倍的增加，再重新进行惯量辨识
+3. 带载辨识情况下，惯量超过辨识范围30倍以上，需手动输入惯量
+4.调整闭环控制参数，降低闭环情况下的电流噪声","1. Check whether the maximum motor speed is set correctly
+2. Increase the torque constant by 10 times, and then re-identify the inertia
+3. In the case of load identification, if the inertia exceeds the identification range by more than 30 times, it is necessary to manually input the inertia
+4. Adjust the closed-loop control parameters to reduce the current noise in closed-loop condition",
+0xFF04,Torque_ripple_error_DS402,转矩脉动辨识错误,1. 只支持旋转电机，空载下辨识,1. Only rotating motors are supported for identification under no load.,1. 暂不会报这个错误,1. This error will not be reported,
+0xFF06,Homing_error_DS402,回零错误,"1.回零超时
+2.未找到Z相","1. Timeout during homing.
+2. The Z-phase was not found.","1. 回零超时，回零超时参数设置为0 不检测超时
+2. 检查Z相是否接好，是否有电平信号触发","1. homing timeout. If the homing timeout parameter is set to 0, no timeout is detected
+2. Check whether Z-phase is properly connected and whether level signal is triggered",
+0xFF07,Drv_error_DS402,硬件短路保护,"1. 硬件过流 导致 DRV nFault 引脚报错
+2. 纯硬件短路保护与软件无关","1. Hardware overcurrent caused an error in the DRV nFault pin.
+2. Pure hardware short-circuit protection is not related to software.","1.检查电机动力输出线是否相间短路，或者短路到地，排除短路后等待1min 功率器件冷却后，才重新正常使能电机，或者软件复位。
+ 2. 在大电流输出下，驱动器散热条件不好，驱动器温度长期处于70摄氏度以上，导致硬件容易误检测到过流
+3. 辨识过程中提示硬件过流信息，电源输出功率不够，辨识过程中因辨识电流过大导致短时间欠压，触发硬件过流保护错误","1. Check whether the power output line of the motor is short-circuited between phases, or short-circuited to the ground. After short-circuited elimination, wait for 1min after the power device cools down, and then enable the motor again normally, or the software resets.
+2. In high current output mode, the heat dissipation condition of the driver is not good. As a result, the driver temperature is over 70 ° C for a long time
+3. During the identification process, a hardware overcurrent message is displayed indicating that the output power of the power supply is insufficient. During the identification process, the identification current is too large, resulting in a short period of undervoltage, which triggers a hardware overcurrent protection error",
+0XFF08,Hall_error_DS402,霍尔传感器错误,霍尔传感器电源线和数据线，未接或断线,"Hall sensor power line and data line, not connected or broken",检查霍尔传感器接线情况，断线恢复后需进行手动Hall辨识,"Check the wiring of the Hall sensor. After the disconnection is restored, manual Hall identification is required."
+0xFF0B,Direction_identification_error_DS402,方向辨识错误,"1.辨识电流无法正常拖动电机，无法拖动方向辨识距离
+2.电机堵转，电机无法拖动
+3.电机惯量过大，电机开环拖动困难","1. The identification current cannot drag the motor normally, and the identification distance of the dragging direction cannot be achieved.
+2. The motor is blocked, and the motor cannot be dragged
+3.The motor inertia is too large, motor open loop drag hard.","1. 检查 UVW是否接好，以及电机本身是否缺相
+2. 检查用手推电机，波形展示的当前位置是否为一条连续的曲线；如出现跳变，则需要检查编码器接线，检查编码器设置，直线或音圈电机还需要检查Z相清除累计误差开关是否关上
+3. 检测电机是否存在堵转情况
+4. 若辨识的现象为电机直接往一个方向运动到极限位置，需将电机推到中间重新进行方向辨识
+5. 增大辨识参数-辨识电流幅值
+6. 增大辨识参数-方向辨识距离
+7. 电气增益降低到50以下再去辨识
+8. 手动输入编码器方向","1. Check whether UVW is properly connected and whether the motor itself is out of phase
+2. Check whether the current position of the waveform displayed by the hand push motor is a continuous curve; In case of jump, it is necessary to check the encoder wiring and encoder Settings. The linear or voice coil motor also needs to check whether the Z phase clear cumulative error switch is turned off
+3. Detect whether the motor is blocked
+4. If the identification phenomenon is that the motor moves directly in one direction to the limit position, it is necessary to push the motor to the middle for direction identification
+5. Increase the identification parameter - identification current amplitude
+6. Increase the identification parameter - direction identification distance
+7. Identification is performed when the electrical gain is lower than 50
+8. Manually enter the encoder direction",
+0xFF0C,Electric_angle_identification_error_DS402,电角度辨识错误,"1.辨识电流无法正常拖动电机，无法拖动方向辨识距离
+2.电机完全堵转，电机被机械抱闸无法运动
+3.编码器分辨率设置错误
+4.增量式编码器断线，编码器无数据","1. The identification current cannot drag the motor normally, and the identification distance of the dragging direction cannot be achieved.
+2. The motor is completely blocked, and the motor cannot move by mechanical lock
+3. encoder resolution setting incorrect.
+4. Incremental encoder breaks line, encoder has no data","1. 检查电机是否存在堵转情况，使用短距离寻相（电角度辨识模式—短距离寻相）
+2. 更换电角度辨识模式—短距离寻相
+3. 检查编码器分辨率
+4. 检查编码器线接线是否存在断线或接错情况","1. Check whether the motor is blocked, and use short-distance phase search (electrical Angle identification mode - short-distance phase search).
+2. Change the electrical Angle identification mode - short distance phase searching
+3. Check the encoder resolution
+4. Check whether the cable to the encoder is broken or connected incorrectly",
+0xFF0D,Hall_identification_error_DS402,霍尔传感器辨识错误,"1.辨识电流无法正常拖动电机，无法拖动方向辨识距离
+2.电机堵转，电机无法拖动
+3.霍尔传感器原始数据存在问题，霍尔缺相","1. The identification current cannot drag the motor normally, and the identification distance of the dragging direction cannot be achieved.
+2. The motor is blocked, and the motor cannot be dragged
+3. There is a problem in the original data of Hall sensor, Hall is out of phase","1. 检查霍尔接线与霍尔信号是否正常，单端霍尔信号是否在辨识过程中受到干扰
+2. 检测电机是否存在堵转情况
+3. 增大辨识参数-辨识电流幅值","1. Check whether Hall cables and Hall signals are normal, and whether single-ended Hall signals are interfered during identification
+2. Detect whether the motor is blocked
+3. Increase the identification parameter - identification current amplitude",
+0xFF0E,Pole_pairs_identification_error_DS402,极对数辨识错误,"1.辨识电流无法正常拖动电机，无法拖动方向辨识距离
+2.电机堵转，电机无法拖动
+3.编码器分辨率设置错误","1. The identification current cannot drag the motor normally, and the identification distance of the dragging direction cannot be achieved.
+2. The motor is blocked, and the motor cannot be dragged
+3. The encoder resolution setting incorrect.","1. 检测电机是否存在堵转情况
+2. 增大辨识参数-极对数辨识时间
+3. 增大辨识参数-极对数辨识等待转子稳定时间
+4. 检查编码器分辨率设置，以及电机极距设置是否正确
+5.检查增量编码器是否存在干扰","1. Detect whether the motor is blocked
+2. Increase the identification parameter - polar logarithm identification time
+3. Increase the identification parameter - pole logarithm identification waiting time for rotor stability
+4. Check whether the encoder resolution setting and motor pole distance setting are correct
+5. Check whether the incremental encoder interferes",
+0xFF0F,Zphase_identification_error_DS402,Z相辨识错误,"1.辨识电流无法正常拖动电机，无法拖动方向辨识距离
+2.电机堵转，电机无法拖动
+3.Z相未接入，未找到Z","1. The identification current cannot drag the motor normally, and the identification distance of the dragging direction cannot be achieved.
+2. The motor is blocked, and the motor cannot be dragged
+3. The Z phase is not connected,  Z phase is not found","1. 检查电机编码器是否为ABZ增量式编码器
+2. 检查Z相信号是否接入","1. Check whether the motor encoder is ABZ incremental encoder
+2. Check whether the Z trust number is connected",
+0xFF10,STO1 security protection,STO1 安全保护,1.STO1引脚 断开24V 触发,1. STO1 pin breaks 24V trigger,1. 有STO功能的驱动器，需要接硬件STO，可参考用户手册。,"1. If the drive with the STO function needs to be connected to a hardware STO, see the user manual.",
+0xFF11,STO2 security protection,STO2 安全保护,1.STO2引脚 断开24V 触发,STO2 pin breaks 24V trigger,1. 有STO功能的驱动器，需要接硬件STO，可参考用户手册。,"1. If the drive with the STO function needs to be connected to a hardware STO, see the user manual.",
+0xFF12,Pressure to protect more than the maximum value,压力保护超过最大值,1. 力控 当前压力值超过 压力保护最大值,1. The current pressure of force control exceeds the maximum pressure protection value,"1. 增大压力保护最大值
+2. 调整力控相关控制增益，提高力控准确性","1. Increase the maximum pressure protection value
+2. Adjust relevant control gain of force control to improve accuracy of force control",
+0xFF13,More than the minimum pressure protection,压力保护超过最小值,1. 力控 当前压力值超过 压力保护最小值,1. The current pressure of force control exceeds the minimum pressure protection value,"1. 减小压力保护最小值
+2. 调整力控相关控制增益，提高力控准确性","1. Reduce the pressure protection minimum
+2. Adjust relevant control gain of force control to improve accuracy of force control",
+0xFF14,Driver peak current overload,驱动器峰值电流过载,1. 驱动器电流，持续超过 驱动器峰值电流持续时间，即会保护，  此为硬件固定参数，不可修改,"1. If the driver current continues to exceed the driver peak current duration, the driver will be protected. This parameter is a fixed hardware parameter and cannot be modified","1.发生过载后 驱动器 需要等待1min冷却，在此时间内无法再次启动使能电机
+2.驱动器断电复位重启冷却时间清零，谨慎操作！
+3. 排查硬件短路情况","1. After overload occurs, the drive needs to wait for 1min to cool down. Within this time, the motor cannot be restarted to enable the motor
+2. Drive power reset restart cooling time zero, careful operation!
+3. Check whether the hardware is short-circuited",
+0xFF15,Accumulated heat overload,驱动器累计热量过载,1. 假设驱动器默认额定电流为10A，软件判定实际驱动器Q轴电流超过10A电流输出即为过载，用户需要根据驱动器当前散热条件来设定驱动器过载保护时间,"1. Assuming that the default rated current of the driver is 10A, the software determines that if the current of the driver's Q axis exceeds 10A, the output is overloaded. The user needs to set the overload protection time of the driver according to the current heat dissipation condition of the driver","1. 增大驱动器过载保护时间，需要在保证驱动器散热条件良好情况下
+2. 降低电机动作节拍
+3. 检查设置的电机额定电流是否超过了驱动器额定电流，如果超过，建议降低电机额定电流设置值","1. To increase the overload protection period of the driver, ensure that the heat dissipation of the driver is good
+2. Reduce the motor action beat
+3. Check whether the rated motor current exceeds the rated driver current. If yes, lower the rated motor current",
+0xFF16,DRV initialization error,DRV初始化错误,1. 硬件DRV在损坏时或者上电初始化阶段STO没有供电会导致DRV初始化失败报错。,"1. If the hardware DRV is damaged or the STO is not powered on during the power-on initialization, an error message is displayed indicating that the DRV initialization fails",1. 有STO功能的驱动器，2路STO都必须接上，少接一路STO会有这种报错现象。,"1. For the drive that has the STO function, both STO must be connected. If less than one STO is connected, this error occurs.",
+0xFF17,Motor peak current overload,电机峰值电流过载,1. 电机电流，持续超过电机峰值电流设定值，且累计时间超过 电机峰值电流持续时间，即会保护,"1. If the motor current continues to exceed the set value of the peak motor current and the cumulative time exceeds the duration of the peak motor current, it will be protected",1. 用户需要根据电机散热和过载能力设定 增大电机峰值电流过载过载持续时间,1. The user needs to increase the overload duration of the peak current of the motor according to the heat dissipation and overload capacity of the motor,
+0xFF18,DC bus overcurrent,直流母线过流,1. 硬件检测直流母线电流超过硬件设计的过流值触发,1. The hardware detects that the DC bus current exceeds the designed hardware overcurrent value,"1. 硬件损坏，误报，比如一使能就报
+2. 相间短路，相对地短路，用户接线异常导致，排除接线问题解决
+3. 电流波动过大，超过硬件检测阈值，换向辨识小电感电机常见，降低电气增益到，减小电流控制波动解决","1. Hardware is damaged and false positives are reported, for example, once enabled
+2. Short circuit between phases, relative short circuit, resulting in abnormal user wiring, solve the wiring problem
+3. The current fluctuation is too large, exceeding the hardware detection threshold, reversing identification of small inductor motor is common, reduce the electrical gain to, reduce the current control fluctuation",
+0xFF19,DC bus disconnection,直流母线掉线,1. 高压驱动器 母线掉线 驱动器断电情况下会发送，断电发生则忽略该错误,1. This error is sent when the driver is powered off. Ignore this error when a power outage occurs,1. 驱动器上电情况下发生则为硬件故障，联系厂家,"1. If the drive is powered on, the hardware is faulty. Contact the manufacturer",
+0xFF1A,Hardware initialization flash error,硬件初始化FLAHS错误,1. 硬件初始化FLAHS错误,1. The hardware initialization FLAHS failed,1. 硬件损坏，联系厂家 ,"1. If the hardware is damaged, contact the manufacturer",
+0xFF1B,Eact initialization error,eact初始化错误,"1. ECAT芯片损坏 导致硬件 ECAT芯片初始化错误
+","1. The ECAT chip is damaged, causing a hardware ECAT chip initialization error","1. 硬件损坏
+2. 固件烧录错误，使用ECAT 固件烧录到了 CAN 版本驱动器，重新确认硬件型号烧录对应固件","1. The hardware is damaged
+2. Firmware burning error, ECAT firmware was used to burn the CAN version driver, confirm the hardware model and burn the corresponding firmware",
+0xFF1C,Bus voltage sampling error,母线电压采样错误,1. 驱动器上电、母线电压稳定后波动在±0.5V维持100ms以上则认为成功，反之认为错误 。（新版本固件去除这个机制，不报错）,"1. When the driver is powered on and the bus voltage is stable, it is considered successful if it fluctuates within ±0.5V and maintains more than 100ms; otherwise, it is considered wrong. (New firmware removes this mechanism, no error is reported)","1. 电源电压不稳定更换电源
+2. 硬件问题更换硬件","1. The power supply voltage is unstable. Replace the power supply
+2. Hardware is faulty. Replace the hardware",
+0xFF1D,Current sampling error,电流采样错误,1. 硬件电流采样错误,1. The hardware current is incorrectly sampled,"1. 电流采样值校准值异常，一般为硬件问题，需要返修。
+2. 有STO功能的驱动器，2路STO都必须接上，少接一路STO可能会有这种报错现象。","1. If the current sampling value and calibration value are abnormal, it is usually a hardware problem and needs to be repaired.
+2. For the drive that has the STO function, both STO must be connected. If less than one STO is connected, this error may occur.",
+0xFF1E,Firmware error,固件错误,1. can、eact、modbus和pulse四种类型的硬件和固件不匹配时报错,1.the hardware and firmware do not match,1. 重新烧录对应的固件,1. Upgrade the corresponding firmware again,
+0xFF20,Activation code key error,激活码密钥错误,1. 驱动器出厂无授权密钥或者密钥解析失败,1. The driver is delivered without the authorized key or the key resolution fails,联系原厂售后或者重新授权尝试,Contact the original factory after sales or re-license attempt,
+0xFF21,Activation code missing error,激活码缺失错误,1. 驱动器没有激活,1. The drive is not activated,联系原厂售后或者重新授权尝试,Contact the original factory after sales or re-license attempt,
+0xFF22,Activation code verification error,激活码校验失败,1. 驱动器license证书错误,1. The license certificate of the drive is incorrect,联系原厂售后或者重新授权尝试,Contact the original factory after sales or re-license attempt,
+0xFF23,未寻相（编码器未校零）错误 ,未寻相（编码器未校零）错误,"1. 仅在用户模式下，未寻相报出
+2. 在出厂模式时，未寻相报警告","1. No phase search is reported in user mode only
+2. No phase warning was found while in factory mode",1. 用户模式报此错误无法再运行，需切换到出厂模式，清除错误变为警告后进行寻相，寻相成功后清除警告，切换回用户模式，需执行一次参数保存,1. The user mode reports this error and cannot run again. You need to switch to the factory mode and search for phase after the error is cleared and the warning is cleared,
+0xFF24,未回零（电缸未校零）错误 ,未回零（电缸未校零）错误 ,"1. 仅在用户模式下，未寻相报出
+2. 在出厂模式时，未寻相报警告","1. No phase search is reported in user mode only
+2. No phase warning was found while in factory mode",1. 用户模式报此错误无法再运行，需切换到出厂模式，清除错误变为警告后进行寻相，寻相成功后清除警告，切换回用户模式，需执行一次参数保存,1. The user mode reports this error and cannot run again. You need to switch to the factory mode and search for phase after the error is cleared and the warning is cleared,,
+0xFF25,多段运行参数错误,多段运行参数错误,多段运行模式内部参数超出范围,1. The internal parameters of the multi-stage running mode are out of range,检查设置参数后是否更改过比例系数，需重新设置参数,Check whether the scale coefficient is changed after setting parameters. You need to reset the parameters,
+0x7385,Multiturn_encoder_1_battery_low_voltage_DS_402,多圈编码器1电池低电压错误,"1. 目前仅实现多摩川编码器告警
+2. 未设置多圈值，错误不会产生
+3. 设置多圈值，以下情况会报错
+    a. 驱动器未接电池上电，设置多圈值后，报编码器电池电压低错误，且无法手动清除，需要重新给电池盒连接上，正常供电后可手动清除
+   b. 驱动器接电池上电，设置多圈值后，断开电池连接会报电池电压低告警，但不影响驱动器工作。","1. Currently only Tamagawa encoder alarm is implemented
+2. If the multiturn value is not set, an error will not occur
+3. Set the multi-circle value. An error is reported in the following cases
+    a.If the driver is not connected to the battery and the encoder battery low voltage error is reported after the multi-turn value is set, and cannot be manually cleared, you need to connect the battery box again, and manually cleared after normal power supply
+    b. After the number of turns is set, a battery low voltage alarm is generated when the driver is disconnected, but the driver does not work.","1. 若未接电池，请将编码器多圈值设为0
+2. 若接电池，请检查电池连接或更换电池","1. If no battery is connected, set the encoder multiple turns value to 0
+2. If the battery is connected, check the battery connection or replace the battery",,
+0x7386,Multiturn_encoder_2_battery_low_voltage_DS_402,多圈编码器2电池低电压错误,"1. 目前仅实现多摩川编码器告警
+2. 未设置多圈值，错误不会产生
+3. 设置多圈值，以下情况会报错
+    a. 驱动器未接电池上电，设置多圈值后，报编码器电池电压低错误，且无法手动清除，需要重新给电池盒连接上，正常供电后可手动清除
+   b. 驱动器接电池上电，设置多圈值后，断开电池连接会报电池电压低告警，但不影响驱动器工作。","1. Currently only Tamagawa encoder alarm is implemented
+2. If the multiturn value is not set, an error will not occur
+3. Set the multi-circle value. An error is reported in the following cases
+    a.If the driver is not connected to the battery and the encoder battery low voltage error is reported after the multi-turn value is set, and cannot be manually cleared, you need to connect the battery box again, and manually cleared after normal power supply
+    b. After the number of turns is set, a battery low voltage alarm is generated when the driver is disconnected, but the driver does not work.","1. 若未接电池，请将编码器多圈值设为0
+2. 若接电池，请检查电池连接或更换电池","1. If no battery is connected, set the encoder multiple turns value to 0
+2. If the battery is connected, check the battery connection or replace the battery",
+0xFF1F,Operation mode error,运行模式错误,1. 当前运行模式为空,1. The current running mode is empty,1. 切换到非空运行模式,1. Switch to the non-empty running mode,
+0xFF26,Unit_conversion_error_DS402,单位转换错误,1. 电子齿轮比或速度单位系数或加速度单位系数的最终计算结果，分母或分子数值超过无符号32bit数4294967295,1. The final calculation result of the electronic gear ratio or the unit coefficient of velocity or the unit coefficient of acceleration where the denominator or numerator value exceeds the unsigned 32bit number of 4294967295,1. 检查设置参数是否合理，重新进行设置,1. Check whether the parameters are correct and set them again,
+0x7112,Over_current_brake_chopper_DS_402,抱闸短路错误,1. 检测到抱闸控制线间短路,1. Short circuit detected between brake control lines.,"1. 检查抱闸控制接线是否存在短接情况。
+2. 检查抱闸器是否损坏或者故障，在接通瞬间产生了大电流。","1. Check whether the brake control cable is short-circuited.
+2. Check whether the brake is damaged or faulty, which generates a large current at the moment of switching on.",
+0x0000,No Error,无错误,,,,,
+0xFFFF,UnKnown,未定义错误,"1.未定义错误,可能是上位机没有刷新","1. If no error is defined, the Studio may not refresh. ",1.建议前往上位机帮助文档错误代码速查处查看,It is recommended to check the error code in the help document,

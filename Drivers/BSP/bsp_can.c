@@ -36,8 +36,9 @@ void Bsp_Can_Init(void)
 uint8_t Bsp_Can_SendData(uint32_t type, uint32_t ID,uint8_t *msgData,uint8_t num)
 {
     // 定义两个变量
-    static CAN_TxHeaderTypeDef canTxHeader = {0};             // CAN发送消息的结构体，定义了发送报文的关键参数
-    static uint32_t txMailbox = 0;                            // 用于记录发送成功时所用的邮箱编号：0~2; 被发送函数HAL_CAN_AddTxMessage()赋值
+    /* 改成局部变量：本函数会被 TIM3 中断调用，static 会和主循环互相踩。 */
+    CAN_TxHeaderTypeDef canTxHeader = {0};
+    uint32_t txMailbox = 0;
                                                               
     /* 限制数据的字节数 */                                    
     if (num > 8)                                              // 判断字节是否超过8字节
@@ -59,16 +60,13 @@ uint8_t Bsp_Can_SendData(uint32_t type, uint32_t ID,uint8_t *msgData,uint8_t num
     canTxHeader.TransmitGlobalTime = DISABLE;                 // 使能时间戳添加到最后两个字节：Data[6]、Data[7]
                                                               
     /* 2.等待发送邮箱空闲 */    
-    uint8_t times = 0;                                        // 注意：如果发送超时失败，总线一直在忙的可能性极低，更大的可能是，CAN没有连接到收发器                              
-    while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0)      // 每次发送前，要等待至有发送邮箱空闲。共有3个发送邮箱。如果返回值为0，即没有发送邮箱空闲，继续等
-    {                                                         
-        HAL_Delay(1);
-        if (times++ >= 5)
-        {
-            times = 0;
-            printf("\r发送失败：等待超时！检查CAN1的线路是否已连接到收发器\r");
-            return 3;
-        }
+    /* 忙等计数，不能用 HAL_Delay：
+     * 本函数会被 TIM3 中断调用，而 TIM3 抢占优先级(1) 高于 SysTick(15)，
+     * 中断里 uwTick 不涨，HAL_Delay 永远返回不了，整机会卡死在这里。 */
+    volatile uint32_t guard = 20000u;
+    while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0)
+    {
+        if (--guard == 0u) return 3;
     }
  
     return HAL_CAN_AddTxMessage(&hcan, &canTxHeader, msgData, &txMailbox);     // 返回发送状态; 成功-0、错误-1、忙错误-2、超时-3

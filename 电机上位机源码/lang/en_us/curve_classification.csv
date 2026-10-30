@@ -1,0 +1,60 @@
+Group,OD Name,Param Name,Index,Sub Index,Unit,Data Type
+Velocity,OutloopSpeedActualValue,Inner Loop Velocity Actual Value,0x3574,0x0,P/s,INTEGER32
+Velocity,OutloopSpeedError,Inner Loop Velocity Error,0x3575,0x0,P/s,INTEGER32
+Velocity,Velocity_actual_value,Velocity Actual Value,0x606c,0x0,P/s,INTEGER32
+Velocity,MotorSpeedObserverActualValue,Speed Observer Actual Value,0x3604,0x0,P/s,INTEGER32
+Velocity,Velocity_demand_value,Velocity Demand Value,0x606b,0x0,P/s,INTEGER32
+Velocity,CurSpeedError,Speed Error,0x351e,0x0,p/s,INTEGER32
+Position,Position_actual_value,Position Actual Value,0x6064,0x0,P,INTEGER32
+Position,LoadPositionActualRawValue,Position Actual Raw Value,0x363b,0x0,P,INTEGER32
+Position,Position_demannd_value,Position Demand Value,0x6062,0x0,P,INTEGER32
+Position,Following_error_actual_value,Position Following Error Actual Value,0x60f4,0x0,P,INTEGER32
+Position,OutloopFollowingError,Inner Loop Position Error,0x3573,0x0,P,INTEGER32
+Position,OutloopPositionActualValue,Inner Loop Position Actual Value,0x3572,0x0,P,INTEGER32
+Position,PositionDemandInternalValue,Internal Position Demand Value,0x60fc,0x0,P,INTEGER32
+Position,ExternalFeedbackPosition,External Feedback Position,0x367b,0x0,P,INTEGER32
+Current,AxisAlphaCurrentActualValue,Alpha-axis Current Actual Value,0x3647,0x0,mA,INTEGER32
+Current,AxisBetaCurrentActualValue,Beta-axis Current Actual Value,0x3648,0x0,mA,INTEGER32
+Current,Axis_D_CurrentActualValue,D-axis Current Actual Value,0x35f6,0x0,mA,INTEGER32
+Current,Axis_D_CurrentDemandValue,D-axis Current Demand Value,0x35f3,0x0,mA,INTEGER32
+Current,PhaseCurrent_U,U-phase Current,0x357a,0x1,mA,INTEGER32
+Current,PhaseCurrent_V,V-phase Current,0x357a,0x2,mA,INTEGER32
+Current,PhaseCurrent_W,W-phase Current,0x357a,0x3,mA,INTEGER32
+Current,EstimatedLoadTorqueCurrent,Equivalent torque current of estimated load force,0x358e,0x0,mA,INTEGER32
+Current,Torque_demand_value,Torque Demand Value,0x6074,0x0,A,INTEGER16
+Current,Current_actual_value,Current Actual Value,0x6078,0x0,A,INTEGER16
+Current,CurCurrentError,Current Error,0x351f,0x0,mA,INTEGER32
+Voltage,AxisAlphaVoltageActualValue,Alpha-axis Voltage Actual Value,0x35f7,0x0,mV,INTEGER32
+Voltage,AxisAlphaVoltageDemandValue,Alpha-axis Voltage Demand Value,0x35f9,0x0,mV,INTEGER32
+Voltage,AxisBetaVoltageActualValue,Beta-axis Voltage Actual Value,0x35f8,0x0,mV,INTEGER32
+Voltage,AxisBetaVoltageDemandValue,Beta-axis Voltage Demand Value,0x35fa,0x0,mV,INTEGER32
+Voltage,PhaseVoltage_U,U-phase Voltage,0x357b,0x1,mV,INTEGER32
+Voltage,PhaseVoltage_V,V-phase Voltage,0x357b,0x2,mV,INTEGER32
+Voltage,PhaseVoltage_W,W-phase Voltage,0x357b,0x3,mV,INTEGER32
+Voltage,DC_link_circuit_voltage,Bus Voltage,0x6079,0x0,mv,UNS32
+IO,Digital_inputs,Digital Inputs IO,0x60fd,0x0,,UNS32
+IO,Digital_outputs_Bit_mask,Digital Outputs Mask,0x60fe,0x2,,UNS32
+IO,Digital_outputs_Physical_outputs,Digital Outputs IO,0x60fe,0x1,,UNS32
+Force,ForceSensorActualValue,Force Sensor Actual Value,0x360d,0x0,unit,INTEGER32
+Force,ForceErrorValue,Force Error,0x3612,0x0,unit,INTEGER32
+Force,ForceDemandValue,Force Demand Value,0x35e9,0x0,unit,INTEGER32
+Feedback,Enc1SingleTurnPosition,Encode 1 Single-Turn Position,0x3676,0x1,P,UNS32
+Feedback,Enc1MultiTurnPosition,Encode 1 Multi-Turn Position,0x3676,0x2,Circle,UNS32
+Feedback,Enc2SingleTurnPosition,Encode 2 Single-Turn Position,0x3676,0x3,P,UNS32
+Feedback,Enc2MultiTurnPosition,Encode 2 Multi-Turn Position,0x3676,0x4,Circle,UNS32
+Feedback,HallSensorData,Hall Sensor Data,0x3677,0x0,,UNS8
+Feedback,ExternalADC1RawData,External ADC1 Raw Data,0x358b,0x0,原始值,INTEGER32
+Feedback,ExternalADC2RawData,External ADC2 Raw Data,0x358c,0x0,原始值,INTEGER32
+Calculate,ElecAngleActualValue,Current Electrical Angle,0x3674,0x0,mrad,UNS32
+Calculate,IpPeriodActualValue,Interpolation Cycle Actual Value,0x3675,0x1,cycle,UNS32
+Calculate,IpPeriodEstValue,Interpolation Cycle Estimated Value,0x3675,0x2,cycle,UNS32
+Calculate,IpTimePhase,Interpolation Time Phase,0x3675,0x3,cycle,UNS32
+Other,ZPhaseDetectError,Z-Phase Detect Error,0x3568,0x0,P,INTEGER32
+Other,Modes_of_operation_display,Current Mode,0x6061,0x0,,INTEGER8
+Other,Controlword,Control Word,0x6040,0x0,,UNS16
+Other,MotorCumulativeHeat,Motor Heat Cumulative Value,0x35a5,0x0,,UNS32
+Other,Inertia,Rotor Inertia,0x3516,0x0,g·cm²,UNS32
+Other,PulseCaptureSignalCounts,Pulse Capture Signal Counts,0x35f0,0x0,,INTEGER32
+Other,IndetifyState,Identify State,0x3008,0x0,,UNS8
+Other,DriveAccumulatedHeat,Drive Heat Accumulation Value,0x35ed,0x0,,UNS32
+Other,Statusword,Status Word,0x6041,0x0,,UNS16

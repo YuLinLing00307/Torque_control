@@ -12,7 +12,7 @@
 (HAL_GPIO_WritePin(RS485_RE_GPIO_Port, RS485_RE_Pin, GPIO_PIN_RESET)); \
 }while(0)
 
-void BSP_rs485_tx(uint8_t *buf, uint8_t len);
+void Bsp_rs485_tx(uint8_t *buf, uint8_t len);
 
 
 #endif

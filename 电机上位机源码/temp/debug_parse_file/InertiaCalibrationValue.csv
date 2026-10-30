@@ -1,0 +1,13 @@
+ValueName,DataType
+当前状态,UNS8
+惯量计算阶段,UNS8
+当前惯量,UNS32
+第一阶段电流位置积分,FLOAT32
+第二阶段电流位置积分,FLOAT32
+第一阶段速度,FLOAT32
+第二阶段速度,FLOAT32
+外力矩估计电流,FLOAT32
+有效辨识中间位置,INT64
+有效辨识初始位置,INT64
+当前电流噪声方差,FLOAT32
+位置环开环电流噪声方差,FLOAT32

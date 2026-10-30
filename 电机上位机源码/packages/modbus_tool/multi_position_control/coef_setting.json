@@ -1,0 +1,9 @@
+{
+  "vel_coef": 100,
+  "acc_coef": 100,
+  "dec_coef": 100,
+  "smooth_factor_coef": 100,
+  "current_bandwidth": 100,
+  "position_bandwidth": 100,
+  "speed_bandwidth": 100
+}
