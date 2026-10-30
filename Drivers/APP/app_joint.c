@@ -66,6 +66,26 @@ static volatile float    s_adm_lead_v  = 0.0f; /* 超前量用的速度，一阶低通，换向
 static volatile float    s_adm_delta_pos = 0.0f;
 static volatile float    s_adm_delta_vel = 0.0f;
 static volatile float    s_adm_tau_grav  = 0.0f;
+/* ---- 运行时增益档位（KEY1 循环切，用于 A/B 对比手感）----
+ * 三档只改软硬：M/B/K 同比例缩放，wn = sqrt(K/M) 和 zeta = B/(2*sqrt(K*M))
+ * 都保持不变，所以响应快慢一样，切的就是"多硬"。
+ * 基准来自 ADM_PRESET 选出的 ADM_M/B/K，改预设这三行会自动跟随。
+ *   ADM_GAIN_SCALE 里 1.00 那一档必须与基准完全一致，所以默认停在 idx=1。
+ *
+ * 为什么不在 CycleGain 里直接写这三个变量：硬浮点写到一半被 TIM3 打断，
+ * ISR 会读到半新半旧的 M/B/K（3 条指令的窗口，概率低但不是零）。
+ * 所以 APP 侧只写一个 u8 请求位，ISR 在拍边界上一次性生效，
+ * 顺便让切档时刻确定，冲击可复现。 */
+#define ADM_GAIN_LEVELS     3u
+static const float   s_adm_gain_scale[ADM_GAIN_LEVELS] = { 0.75f, 1.00f, 1.3333f };
+static volatile uint8_t s_adm_gain_req = 1u;   /* APP 侧请求的档位（0..2） */
+static uint8_t          s_adm_gain_cur = 1u;   /* ISR 侧已生效的档位 */
+static volatile float s_adm_m     = ADM_M;         /* 当前生效值，递推直接用 */
+static volatile float s_adm_b     = ADM_B;
+static volatile float s_adm_k     = ADM_K;
+static volatile float s_adm_inv_m = 1.0f / ADM_M;
+static void Adm_ApplyGain(uint8_t idx);        /* 实现见文件末尾 */
+
 static volatile uint32_t s_adm_beat    = 0u;   /* 递推心跳 */
 
 static volatile int32_t  s_adm_pos_ref = 0;    /* 平衡位置 = 使能后位置，运行中不改 */
@@ -146,6 +166,12 @@ static void Adm_Solve100(void)
 
     s_adm_beat++;
 
+    /* 档位切换只在拍边界生效，见上方 s_adm_gain_req 的注释 */
+    if (s_adm_gain_req != s_adm_gain_cur)
+    {
+        Adm_ApplyGain(s_adm_gain_req);
+    }
+
     /* 外力矩 = 传感器读数 - 该姿态下的重力矩，静止时应≈0 */
     tau_ext = (torque - s_adm_tau_grav) * ADM_TAU_SIGN;
 
@@ -162,7 +188,7 @@ static void Adm_Solve100(void)
 
     /* 导纳方程： M*acc + B*vel + K*delta = tau_ext
      * 实测位置不参与 pos_cmd，只用于重力补偿和看门狗。 */
-    acc_cmd = (tau_ext - ADM_B * delta_vel - ADM_K * delta_pos) * ADM_INV_M;
+    acc_cmd = (tau_ext - s_adm_b * delta_vel - s_adm_k * delta_pos) * s_adm_inv_m;
 
     /* 先限速度再积分，顺序不能反 */
     delta_vel += acc_cmd * ADM_DT;
@@ -205,7 +231,7 @@ static void Adm_Solve100(void)
 
     target = (int32_t)pos_tgt;
 
-    /* 两个峰值，纯测量。单拍跳变上限 = 限速 100 + 超前项 45 = 145 counts */
+    /* 两个峰值，纯测量。单拍跳变上限见 App_Joint_Adm_Stop() 的打印 */
     {
         int32_t j = target - s_adm_tgt_prev;
         int32_t e = target - s_adm_pos_fdb;
@@ -561,12 +587,24 @@ static uint8_t Adm_Rd(uint16_t index, uint8_t sub, uint32_t *value)
 }
 
 /* ---------------------------------------------------------------------
- *  PP 换点：0x0F(bit4=0) -> 写 0x607A -> 0x3F(bit4 上升沿 = 采信新点)
- *  这套序列在位置流测试里连跑 400 点零失败，原样搬过来。
- *  单次约 3 ms（三条 SDO 各一个来回），50 Hz 下不影响 NJ70 的问答。
+ *  换点。两种机制由 ADM_USE_IP 选择，逻辑完全不同：
+ *
+ *  IP（0x6060=7）：只写 0x607A，控制字恒 0x000F。
+ *     驱动器按 0x60C2(1 ms) 自己插补过去，**不做"到点停"重规划**，
+ *     所以没有 PP 那个 25 Hz 的速度三角，运动是连续的。
+ *     只要一条 SDO，换点从约 3 ms 降到约 1 ms。
+ *
+ *  PP（0x6060=1）：0x0F(bit4=0) -> 写 0x607A -> 0x3F(bit4 上升沿 = 采信新点)。
+ *     位置流测试里连跑 400 点零失败，也是现在这版的保底路径。
  * ------------------------------------------------------------------- */
 static uint8_t Adm_PpSend(int32_t tgt)
 {
+#if (ADM_USE_IP != 0u)
+    if (!Adm_Wr(OD_TARGET_POSITION, 0u, (uint32_t)tgt, 4u)) return 0u;
+
+    s_adm_pp_sent = tgt;
+    return 1u;
+#else
     if (!Adm_Wr(OD_CONTROLWORD, 0u, CW_ENABLE_OPERATION, 2u)) return 0u;
     HAL_Delay(1u);                       /* 给驱动器清 bit12 的时间，实测 400 点无失败 */
     if (!Adm_Wr(OD_TARGET_POSITION, 0u, (uint32_t)tgt, 4u))   return 0u;
@@ -575,6 +613,7 @@ static uint8_t Adm_PpSend(int32_t tgt)
 
     s_adm_pp_sent = tgt;
     return 1u;
+#endif
 }
 
 /* ---------------------------------------------------------------------
@@ -622,13 +661,20 @@ static void App_Joint_Adm_Step(void)
     {
     case 1u:
         Dev_Joint_SetPosFreeze(1u);      /* 独占 SDO：挡住 app_nj70 的周期性位置读 */
-        printf("\r\n[ADM] ===== 导纳控制启动（PP 位置流 · 50 Hz 换点）=====\r\n");
+#if (ADM_USE_IP != 0u)
+        printf("\r\n[ADM] ===== 导纳控制启动（IP 插补位置 · %u ms 换点）=====\r\n",
+               (unsigned)ADM_STR_MS);
+#else
+        printf("\r\n[ADM] ===== 导纳控制启动（PP 位置流 · %u ms 换点）=====\r\n",
+               (unsigned)ADM_STR_MS);
+#endif
         printf("[ADM] M=%.2e  B=%.2e  K=%.2e  软限位 +-%.1f deg (预设 %d)\r\n",
-               (double)ADM_M, (double)ADM_B, (double)ADM_K,
+               (double)s_adm_m, (double)s_adm_b, (double)s_adm_k,
                (double)ADM_LIMIT_DEG, (int)ADM_PRESET);
-        printf("[ADM] 力矩符号 %.0f  等效惯量 J=%.2f kg.m^2  刚度 %.3f N.m/deg\r\n",
-               (double)ADM_TAU_SIGN, (double)(ADM_M * 83443.0f),
-               (double)(ADM_K * 83443.0f / 57.2958f));
+        printf("[ADM] 力矩符号 %.0f  等效惯量 J=%.2f kg.m^2  刚度 %.3f N.m/deg  档位 %u/%u\r\n",
+               (double)ADM_TAU_SIGN, (double)(s_adm_m * 83443.0f),
+               (double)(s_adm_k * 83443.0f / 57.2958f),
+               (unsigned)(s_adm_gain_cur + 1u), (unsigned)ADM_GAIN_LEVELS);
         if (torque_first_flag == 0u)
         {
             Adm_Fail("力矩传感器没有数据，先查 App_NJ70_Task / RS485");
@@ -683,11 +729,19 @@ static void App_Joint_Adm_Step(void)
             s_adm_mode_old = (uint8_t)(int8_t)v;
             printf("[ADM] 原运行模式 0x6060 = %d（仅记录）\r\n", (int)s_adm_mode_old);
         }
+#if (ADM_USE_IP != 0u)
+        if (!Adm_Wr(OD_MODES_OF_OPERATION, 0u, JOINT_MODE_IP, 1u))
+        {
+            Adm_Fail("写 0x6060 = 7 (IP 插补位置模式) 失败");
+            return;
+        }
+#else
         if (!Adm_Wr(OD_MODES_OF_OPERATION, 0u, JOINT_MODE_PP, 1u))
         {
             Adm_Fail("写 0x6060 = 1 (PP 轮廓位置模式) 失败");
             return;
         }
+#endif
         s_adm_step = 4u;
         break;
 
@@ -697,6 +751,15 @@ static void App_Joint_Adm_Step(void)
             Adm_Fail("读 0x6061 超时");
             return;
         }
+#if (ADM_USE_IP != 0u)
+        printf("[ADM] 模式确认 %d (%s)\r\n", (int)(int8_t)v,
+               ((int8_t)v == JOINT_MODE_IP) ? "IP 插补位置模式" : "不是 IP！");
+        if ((int8_t)v != JOINT_MODE_IP)
+        {
+            Adm_Fail("模式没有切到 7 (IP)");
+            return;
+        }
+#else
         printf("[ADM] 模式确认 %d (%s)\r\n", (int)(int8_t)v,
                ((int8_t)v == JOINT_MODE_PP) ? "PP 轮廓位置模式" : "不是 PP！");
         if ((int8_t)v != JOINT_MODE_PP)
@@ -704,6 +767,7 @@ static void App_Joint_Adm_Step(void)
             Adm_Fail("模式没有切到 1 (PP)");
             return;
         }
+#endif
         s_adm_step = 5u;
         break;
 
@@ -719,6 +783,25 @@ static void App_Joint_Adm_Step(void)
         {
             printf("[ADM] 0x6081 轮廓速度 = %lu counts/s\r\n", (unsigned long)v);
         }
+#if (ADM_USE_IP != 0u)
+        /* IP 模式下 0x60C2 决定驱动器多久插补一次。只读确认，不写：
+         * 出厂 子1=1、子2=-3 = 1 ms，这个值是对的。
+         * 曾改成 10 想"与写点周期对齐"，结果 11.4 deg 稳态误差、
+         * 驱动器出力约 0、手感完全消失。别碰。 */
+        {
+            uint32_t per = 0u, exp = 0u;
+
+            if (Adm_Rd(OD_INTERP_TIME, 1u, &per) & Adm_Rd(OD_INTERP_TIME, 2u, &exp))
+            {
+                printf("[ADM] 0x60C2 插补周期 = %lu x 10^%ld ms（出厂 1 ms，保持不动）\r\n",
+                       (unsigned long)per, (long)(int32_t)(int8_t)(exp & 0xFFu));
+            }
+            else
+            {
+                printf("[ADM] 0x60C2 读不到，按出厂 1 ms 处理\r\n");
+            }
+        }
+#endif
         s_adm_step = 6u;
         break;
 
@@ -882,6 +965,12 @@ static void App_Joint_Adm_Step(void)
         printf("[ADM]   err = tgt - fdb（驱动器真正感受到的偏差，不是 cmd - fdb）\r\n");
         printf("[ADM]   速度上限 %.0f counts/s (%.1f deg/s)，超前补偿 %.0f ms\r\n",
                (double)ADM_VEL_MAX, (double)COUNT_TO_DEG((int32_t)ADM_VEL_MAX), (double)ADM_LEAD_MS);
+#if (ADM_USE_IP != 0u)
+        printf("[ADM]   机制：IP 插补（0x6060=7，只写 0x607A，驱动器按 0x60C2 自己插补）\r\n");
+        printf("[ADM]   vel 应连续变化；若 vel 仍是 +-24000 脉冲，说明 IP 也按 0x6083 重规划\r\n");
+#else
+        printf("[ADM]   机制：PP 轮廓（0x0F->0x607A->0x3F 三帧 SDO）\r\n");
+#endif
         break;
 
     default:
@@ -1042,13 +1131,14 @@ void App_Joint_Adm_Stop(void)
         printf("[ADM] 递推 %lu 拍(100 Hz) / 换点成功 %lu 次 / 失败 %lu 次\r\n",
                (unsigned long)s_adm_beat, (unsigned long)s_adm_pp_ok,
                (unsigned long)s_adm_pp_bad);
-        /* 上限 = 限速贡献 VEL_MAX*DT + 超前项贡献 VEL_MAX*LEAD_S*LPF
-         *      = 100 + 45 = 145 counts。超出说明 TIM3 递推被延迟了若干拍
-         * （CAN RX 优先级 0 高于 TIM3 的 1），不是控制律的问题。 */
+        /* 上限 = 限速贡献 VEL_MAX*DT + 超前项贡献 2*VEL_MAX*LEAD_S*LPF
+         *      = 130 + 183 = 313 counts。
+         * 超前项前面那个 2 不能漏：换向时 delta_vel 是跨零翻转（-V 直接到 +V），
+         * 超前量单拍变化量是 2*V*LPF，不是 V*LPF。少乘 2 会误判"超限"。 */
         printf("[ADM] 单拍位置指令跳变峰值 = %ld counts（理论上限 %ld）\r\n",
                (long)s_adm_jump_pk,
                (long)(int32_t)(ADM_VEL_MAX * ADM_DT
-                               + ADM_VEL_MAX * ADM_LEAD_S * ADM_LEAD_LPF));
+                               + 2.0f * ADM_VEL_MAX * ADM_LEAD_S * ADM_LEAD_LPF));
         printf("[ADM] |指令-反馈| 峰值 = %ld counts (%.1f deg)\r\n",
                (long)s_adm_err_pk, (double)COUNT_TO_DEG(s_adm_err_pk));
         printf("[ADM] 净漂移 %+ld counts (%.3f deg)\r\n",
@@ -1243,4 +1333,70 @@ void App_Joint_Adm_Task(void)
                (unsigned long)s_adm_pp_bad,
                (long)s_adm_tq_pm, (long)s_adm_vel_fb);
     }
+}
+
+/* =====================================================================
+ *  运行时增益档位
+ *  KEY1 -> App_Joint_Adm_CycleGain() -> 只写请求位 -> ISR 拍边界生效
+ * ===================================================================== */
+static void Adm_ApplyGain(uint8_t idx)
+{
+    float sc;
+
+    if (idx >= ADM_GAIN_LEVELS) idx = 0u;
+    sc = s_adm_gain_scale[idx];
+
+    s_adm_m     = ADM_M * sc;
+    s_adm_b     = ADM_B * sc;
+    s_adm_k     = ADM_K * sc;
+    s_adm_inv_m = 1.0f / s_adm_m;      /* 一次除法，只在切档那一拍做 */
+
+    s_adm_gain_cur = idx;
+}
+
+uint8_t App_Joint_Adm_GetGain(void)
+{
+    return s_adm_gain_req;
+}
+
+uint8_t App_Joint_Adm_SetGain(uint8_t idx)
+{
+    if (idx >= ADM_GAIN_LEVELS) idx = 0u;
+    s_adm_gain_req = idx;
+    return idx;
+}
+
+/* 循环切到下一档，打印一行。返回新档位（1..3，给人看的编号）。
+ * 运行中切档不重置 delta_pos / delta_vel：位置连续、力矩突变，
+ * 手感觉到的就是"弹簧突然变硬/变软"，正是要对比的东西。 */
+uint8_t App_Joint_Adm_CycleGain(void)
+{
+    static const char *nm[ADM_GAIN_LEVELS] = { "软", "中", "硬" };
+    /* 按 中 -> 软 -> 硬 走，不是按编号走。默认停在中档，
+     * 第一下更省力、第二下更硬，比"第一下直接跳到最硬"好对比。 */
+    static const uint8_t ord[ADM_GAIN_LEVELS] = { 1u, 0u, 2u };
+    uint8_t i;
+    uint8_t idx;
+    float   kk;
+
+    for (i = 0u; i < ADM_GAIN_LEVELS; i++)
+    {
+        if (ord[i] == s_adm_gain_req) break;
+    }
+    if (i >= ADM_GAIN_LEVELS) i = 0u;
+    idx = ord[(uint8_t)((i + 1u) % ADM_GAIN_LEVELS)];
+
+    s_adm_gain_req = idx;
+
+    kk = ADM_K * s_adm_gain_scale[idx] * 83443.0f / 57.2958f;   /* N.m/deg */
+
+    printf("[ADM] 档位 %u/%u = %s  K=%.3f N.m/deg（45 deg 对应 %.1f N.m）"
+           "  M=%.2e B=%.2e%s\r\n",
+           (unsigned)(idx + 1u), (unsigned)ADM_GAIN_LEVELS, nm[idx],
+           (double)kk, (double)(kk * ADM_LIMIT_DEG),
+           (double)(ADM_M * s_adm_gain_scale[idx]),
+           (double)(ADM_B * s_adm_gain_scale[idx]),
+           (App_Joint_Adm_IsBusy() != 0u) ? "  [运行中，下一拍生效]" : "");
+
+    return (uint8_t)(idx + 1u);
 }

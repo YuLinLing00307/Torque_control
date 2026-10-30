@@ -100,31 +100,12 @@ uint8_t  Dev_Joint_NmtState(void);
 /* ---------- SYNC：CSP/CSV/CST 都靠它推动，必须由主站周期发 ---------- */
 uint8_t Dev_Joint_Sync(void);
 
-/* ---------- RPDO1：控制字 + 目标位置，1 kHz 设定点流 ----------
- * 为什么非要它：0x60C2（插补周期）出厂就是 1 ms，驱动器每个插补周期都要
- * 一个新的设定点。我们以前 10 ms 才写一次 0x607A，驱动器必须在 1 ms 内
- * 走完 10 ms 的增量 —— 实际执行速度恒等于控制律算出来的 10 倍，
- * 力矩需求也是 10 倍。RPDO 每 1 ms 一帧，速度与 delta_vel 一一对应，
- * 且不用改驱动器任何参数（0x60C2 保持出厂 1 ms）。
- *
- * Dev_Joint_Rpdo1Setup()：读 0x1400/0x1600 看清现状，必要时把 RPDO1 的
- * 第二映射项从 0x60FF 换成 0x607A。改的是【通信参数】，不碰电机参数，
- * 原值会打印出来备查。成功返回 1；失败返回 0，调用方应回退到 SDO 100 Hz。
- */
-uint8_t  Dev_Joint_Rpdo1Setup(void);                    /* 第 2 项 = 0x60FF */
-uint8_t  Dev_Joint_Rpdo1SetupTo(uint32_t map2);          /* 第 2 项 = map2 */
-
 /* TPDO1 改映射成 {0x6041, 0x6064}，让位置走 PDO 而不是 SDO 轮询。
  * 必须在 NMT Start 之前调用（Pre-operational 下才能改映射）。
  * 成功返回 1，之后用 Dev_Joint_TpdoGetPos() 零开销取位置。 */
 uint8_t  Dev_Joint_Tpdo1SetupPos(void);
 int32_t  Dev_Joint_TpdoGetPos(void);
 uint32_t Dev_Joint_TpdoPosCount(void);
-uint8_t  Dev_Joint_Rpdo1Send(uint16_t cw, int32_t pos);
-uint8_t  Dev_Joint_Rpdo1Ok(void);
-uint8_t  Dev_Joint_Rpdo1NeedSync(void);   /* 1 = 传输类型不是 255，要配 SYNC */
-uint16_t Dev_Joint_Rpdo1Cob(void);
-uint32_t Dev_Joint_RpdoTxCount(void);
 
 /* ---------- 统计（调试用） ---------- */
 uint32_t Dev_Joint_RxCount(void);
@@ -133,14 +114,12 @@ uint32_t Dev_Joint_TxFailCount(void);
 uint32_t Dev_Joint_Tpdo1Count(void);    /* 收到的 TPDO1 帧数 */
 
 /* ---------- 位置读取（语义封装） ----------
- * APP 层不要直接碰 0x6064 / SDO：
+ * APP 层不要直接碰 0x6064 / SDO。
  *   Dev_Joint_ReadPos()  发一次 SDO 读位置（阻塞约 1~2 ms），成功则更新缓存并返回 1
- *   Dev_Joint_GetPos()   直接返回缓存值，零开销，周期任务里随便调
- * 注意：1 kHz 力控环里不能用 ReadPos()，那时候必须改走 PDO / TPDO。
+ * 位置反馈已经全走 TPDO1（Dev_Joint_TpdoGetPos），这个函数只在调试/自检里用，
+ * 100 Hz 导纳环里绝不调用。
  */
 uint8_t Dev_Joint_ReadPos(int32_t *pos);
-uint32_t Dev_Joint_PosAgeMs(void);
-int32_t Dev_Joint_GetPos(void);
 
 /* 冻结 ReadPos：置 1 后只返回缓存，不再发 SDO。
  * 100 Hz 控制环独占 SDO 通道时必须打开，否则 20 Hz 的位置读会插进来抢通道。 */

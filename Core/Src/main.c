@@ -111,8 +111,8 @@ int main(void)
 		App_Key_Task();
 		App_NJ70_Task();
 		App_Joint_Task();
-		App_Joint_Adm_Task();        /* µ¼ÄÉ»·£ºÆô¶¯×´Ì¬»ú + PP »»µã + ¿´ÃÅ¹·£¨ISR Ö»×öµÝÍÆ£©*/
-		//App_Joint_GravScan_Task();   /* PP 8 µãÉ¨½Ç£¬ÖØÄâºÏÖØÁ¦¾ØÊ±ÓÃ */
+		App_Joint_Adm_Task();        /* ï¿½ï¿½ï¿½É»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½ + PP ï¿½ï¿½ï¿½ï¿½ + ï¿½ï¿½ï¿½Å¹ï¿½ï¿½ï¿½ISR Ö»ï¿½ï¿½ï¿½ï¿½ï¿½Æ£ï¿½*/
+		//App_Joint_GravScan_Task();   /* PP 8 ï¿½ï¿½É¨ï¿½Ç£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ */
 		
     /* USER CODE END WHILE */
 

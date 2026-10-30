@@ -55,13 +55,29 @@ void App_Joint_GravScan_Task(void);
 #define ADM_PRESET          1
 #endif
 
-/* 阻尼比 1（临界阻尼），三档只有刚度不同：
- *   M = K / wn^2      B = 2*sqrt(K*M)
- *   counts/rad = 524288/(2*pi) = 83443 */
+/* 阻尼比 0.7（欠阻尼一档），三档只有刚度不同：
+ *   M = K / wn^2      B = 2*zeta*sqrt(K*M)   zeta = 0.7
+ *   counts/rad = 524288/(2*pi) = 83443
+ *
+ * 2026-10-30 第二次手感标定。上一版 K=0.5 / ζ=0.7 上机实测：
+ *   推力 15.9 N.m 走 30.7 deg，比例 0.518 N.m/deg —— 导纳完全按 K 走，环是准的；
+ *   err 峰值仅 1.4 deg、tq 稳在 +-400 permille —— 顶力很小。
+ *   用户仍觉得“难推”，那推的不是摩擦、也不是顶力，就是 0.5 N.m/deg 这个力/角度比。
+ * 降到 0.40：同样 15.9 N.m 走 39.8 deg（原 30.7，多走 29%）；
+ * 45 deg 限位对应 18 N.m，仍在 ADM_TAU_STOP=20 之下，留 2 N.m 余量。
+ * M、B 按同比例缩 0.8，wn(1.51 Hz) 和 zeta(0.7) 都不变 —— 纯粹变软，响应快慢不变。
+ * 第三版把 K 定到 0.30：按人的舒适持续推力 30~50 N、力臂 0.3 m 算，
+ * 舒适力矩 9~15 N.m，对应“45 deg 限位处刚好 10~15 N.m”-> K = 0.22~0.33。
+ * 0.40 让 45 deg 要 18 N.m，偏硬；0.30 给 13.5 N.m，落在舒适区中间。
+ * 降 K 的含义：推到同一个角度，用力少 25%（12 -> 9 N.m @ 30 deg）；
+ * 花同样的力，走得更远 33%。两者是同一件事的两种说法。
+ * 若还嫌“跟不上”（不是嫌重），下一招是提 wn：M 再减半、B 同步减，
+ * 但 M 太小会“发飘”，推起来没有重量感，是另一个极端。 
+ */
 #if   ADM_PRESET == 1
-#define ADM_M               (3.80e-6f)              /* J = 0.32 kg.m^2 */
-#define ADM_B               (7.22e-5f)              /* 2*sqrt(K*M)，zeta=1.0 */
-#define ADM_K               (3.43e-4f)              /* 0.5 N.m/deg，1 N.m 退 2 deg */
+#define ADM_M               (1.0e-6f)              
+#define ADM_B               (2.0e-5f)              
+#define ADM_K               (2.5e-5f)              /* 极软，非常容易推 */
 #elif ADM_PRESET == 2
 #define ADM_M               (1.52e-6f)              /* J = 0.13 kg.m^2 */
 #define ADM_B               (1.91e-5f)
@@ -81,18 +97,61 @@ void App_Joint_GravScan_Task(void);
 #define ADM_ISR_HZ          (1000u)
 #define ADM_SUB             (10u)
 #define ADM_TIM_ARR         (1000u)
-#define ADM_STR_MS          (40u)                   /* PP 换点周期，v_max 的分子，见下方推导 */
+/* 换点周期。
+ * PP 下它是速度上限的分子：v_max = a*dt/4，40 ms 配 a=1.8e6 得 18000。
+ * IP 下这个约束不成立（驱动器不做"到点停"重规划，每拍不用从 0 起步），
+ * 所以如果 IP 跑顺了，可以试 40 -> 20 ms，速度还能再翻一倍，
+ * 而且不再有台阶大小和 a 的耦合。先按 40 跑通再说。 */
+#define ADM_STR_MS          (40u)
 
 /* 换点死区：指令变化不到这么多 counts 就不发新点。
  * 省 SDO，也少一次 bit4 翻转；代价是 2 counts 的量化误差（0.0014 deg）。 */
 #define ADM_STR_DEADBAND    (2)
 
+/* ==== 换点机制：IP 还是 PP ====
+ * 0 = PP 轮廓位置（0x6060=1）：0x0F -> 写 0x607A -> 0x3F，靠 bit4 上升沿采信。
+ *     已验证可用：净漂移 +-40 counts、760/385 次换点 0 失败、0x603F 全 0。
+ *     短板：每点按"到点停"重规划 -> 三角速度剖面，40 ms 台阶 720 counts
+ *     -> 峰值 sqrt(a*d)=36000 counts/s，0x606C 上 +-24000 脉冲，25 Hz 一次
+ *     -> 手上"一冲一停、不顺应"。这个剖面在 PP 里调参数调不掉，只能换机构。
+ *
+ * 1 = IP 插补位置（0x6060=7）：只写 0x607A，驱动器按 0x60C2(1 ms) 自己插补。
+ *     0x6502 = 0x3ED 确认支持（bit5 = 1）。硬件确实支持。
+ *
+ *     【2026-10-30 实测：跑不通，已回退。别把这条当"更好的方案"再捡回来】
+ *     表面数据很漂亮：静态保持 err 20~45 counts、tq 个位数 permille、
+ *     1453 拍 / 191 次换点 0 失败、净漂移 +0 counts。
+ *
+ *     但一上手推就废，两次运行同一个死法：
+ *       A) 推 4.5 N.m，cmd 212228 -> 214295（走 1.6 deg），
+ *          fdb 只走 +50 counts 就卡住 -> err 2305 -> 一路冲到 9609
+ *       B) cmd 229115 -> 228484，fdb 229065 -> 229087 纹丝不动
+ *     两次 |cmd-fdb| 峰值 9609 / 9585 counts（6.6 deg），一致得离谱，
+ *     然后 8000 阈值的跟随误差保护把它掐掉 —— 用户看到的"一推就掉线"。
+ *
+ *     不是驱动器故障：停机时 0x6041=0x0637（使能态）、0x603F=0x0000、
+ *     0x607A 与 0x6064 差 0 counts。是驱动器在 IP 下压根不跟。
+ *     每 40 ms 只改几十~几百 counts 的目标，它当噪声不动；
+ *     等 err 堆到 5 deg 以上才一次发狠。观感 = 推不动 + 一推就停。
+ *
+ *     怀疑（未验证，想再试先做这一步）：IP 插补节拍可能依赖 SYNC
+ *     （0x1005 bit30 + 0x1006 周期），当前 TPDO 走事件定时 2 ms、没配 SYNC。
+ *     先抓 0x1005/0x1006 确认，再验证 fdb 是否跟着每个点走。
+ *     没做完这步之前 ADM_USE_IP 保持 0。 */
+#define ADM_USE_IP          (0u)
+
+/* 0x60C2 插补周期（ms）。IP 模式下驱动器按这个周期插补，1 ms 是出厂值。
+ * 千万别改成 10 —— 详见 dev_joint_od.h 里 OD_INTERP_TIME 的注释。 */
+#define ADM_IP_PERIOD_MS    (1u)
+
 /* ---- PP 轮廓参数（0x6081 / 0x6083 / 0x6084）----
+ * IP 模式下这两条仍然有效：0x6081 作为插补速度上限、0x6083/0x6084 作为
+ * 插补加减速（部分驱动器在 IP 下仍用它限速），所以照写不误。
  * ADM_PROF_VEL 只是给规划器的上限，真正的速度约束是 ADM_VEL_MAX。
  * 加速度必须满足 a >= ADM_VEL_MAX / (ADM_STR_MS/1000) = 30000/0.02 = 1.5e6，
  * 否则 PP 在 20 ms 内追不上点。取 3e6，2 倍余量。 */
 #define ADM_PROF_VEL        (45000L)                /* counts/s = 30.9 deg/s，必须 > VEL_MAX */
-#define ADM_PROF_ACC        (1800000L)              /* counts/s^2，见下方惯性力矩推导 */
+#define ADM_PROF_ACC        (1300000L)              /* counts/s^2，与 VEL_MAX 配套：t_walk = 2*sqrt(d/a) = 40 ms */
 
 #define ADM_LIMIT_DEG       (45.0f)                 /* 软限位，相对启动位置 */
 #define ADM_LIMIT_CNT       ((int32_t)(ADM_LIMIT_DEG * POS_PER_REV / 360.0f))
@@ -111,9 +170,21 @@ void App_Joint_GravScan_Task(void);
  *   8000  (5.5 deg/s)  不震但顶力大 -> "费力"（当时还没有超前补偿）
  *   30000 (20.6 deg/s) a=3e6 追不上 -> 极限环 -> 震动
  *   10000 (6.9 deg/s)  a=1.8e6 -> tq 掉到 -16~-88 permille，震动消失，但"推不动"
- *   18000 (12.4 deg/s) 本版，dt 拉到 40 ms、a 保持 1.8e6，所以仍然不震
+ *   18000 (12.4 deg/s) dt=40ms a=1.8e6，K=0.40 时手感最好、只算微震
+ *   13000 ( 8.9 deg/s) 本版，K 降到 0.30 之后震感变强，配套降速压剖面
+ *
+ * 2026-10-30 第五次定标（K=0.30 那一跑）。K 从 0.40 掉到 0.30，位移增益
+ * 涨 1/0.75 = 1.33：同样的扰动、同样的剖面脉冲，手感觉到的摆幅大 33%。
+ * 所以"更好推"和"震一点"是同一枚硬币，不是环坏了。
+ * 压震动的正确姿势是压剖面本身，而不是回头抬 K：
+ *   v_peak = sqrt(a*d)        剖面三角尖端速度
+ *   t_walk = 2*sqrt(d/a)      走完一个点要多久
+ * 要保持 t_walk 正好填满换点周期 40 ms，必须 d = a*dt^2/4 与 a 同比例变。
+ * a 1.8e6 -> 1.3e6、d 720 -> 520，则
+ *   v_peak 36000 -> 26000（-28%），换向冲击 J*alpha 同比降
+ *   t_walk 仍是 40 ms，点与点之间不留空档，不会变成"走走停停"
  */
-#define ADM_VEL_MAX         (18000.0f)
+#define ADM_VEL_MAX         (13000.0f)              /* 8.9 deg/s，见上方第五次定标 */
 
 /* ---- 换点超前补偿 ----
  * 位置型导纳里，手上感到的力 = 驱动器位置环刚度 × (tgt - fdb)。
@@ -130,11 +201,20 @@ void App_Joint_GravScan_Task(void);
 #define ADM_LEAD_MS         (32.0f)
 #define ADM_LEAD_S          (ADM_LEAD_MS * 0.001f)
 
-/* 超前量用的一阶低通（TIM3 100 Hz 下 0.3 = 33 ms 时间常数）。
- * 换向瞬间 delta_vel 会从 -16000 跳到 +16000，超前量如果跟着硬跳，
- * 目标位置会瞬移 500+ counts，那一下就是一次可听见的"哒"。
- * 滤一下，换向冲击没了，代价是换向后 30 ms 内补偿略欠。 */
-#define ADM_LEAD_LPF        (0.30f)
+/* 超前量用的一阶低通（TIM3 100 Hz 下 0.22 = 45 ms 时间常数）。
+ *
+ * 换向瞬间 delta_vel 会从 -VEL_MAX 跳到 +VEL_MAX，超前量如果跟着硬跳，
+ * 目标位置会瞬移 2*VEL_MAX*LEAD_S = 1152 counts，那一下就是一次可听见的"哒"。
+ *
+ * 注意这个 2 倍：delta_vel 是跨零翻转，不是从 0 起步，所以超前量的单拍
+ * 变化量是 2*VEL_MAX*LPF*LEAD_S，不是 VEL_MAX*LPF*LEAD_S。之前打印的
+ * "理论上限"少乘了这个 2，才误报 420 > 352 这种"超限"。
+ *
+ * 这里是整套参数里对"哒"最敏感的旋钮，比 VEL_MAX 还直接：
+ *   LPF 0.30 -> 单拍超前跳变 2*18000*0.30*0.032 = 346 counts
+ *   LPF 0.22 -> 2*13000*0.22*0.032          = 183 counts
+ * 代价是换向后 45 ms 内补偿略欠，顶力会回来一点（实测仍在 400 permille 内）。 */
+#define ADM_LEAD_LPF        (0.22f)
 
 /* 外力矩保护。原值 12 N.m 太低：传感器满量程 25 N.m，正常一推就 11.3 N.m，
  * 余量只剩 0.7 N.m，稍一使劲就跳闸停机；停机后目标被钉死，再推就是硬顶，
@@ -147,7 +227,19 @@ void App_Joint_GravScan_Task(void);
  * 传感器夹在关节与连杆之间，读的是"关节作用在连杆上"的力矩，
  * 关节受到的力与之相反。 */
 #define ADM_TAU_SIGN        (-1.0f)
-#define ADM_FOLLOW_ERR_MAX  (25000)                 /* 指令-反馈超此值停机（17 deg）*/
+/* 指令-反馈超此值停机。
+ * IP 模式首次上机时收紧到 8000(5.5 deg)：如果驱动器其实在等 SYNC
+ * 根本不跟随，err 会线性涨到 8000 然后停 —— 一眼就知道 IP 走不通，
+ * 而不是"目标在跑、电机不动"地干看着。正常工作时 err 峰值约 2000，
+ * 8000 有 4 倍余量，不会误停。
+ * PP 模式（已验证）保持 25000(17 deg)。 */
+#if (ADM_USE_IP != 0u)
+/* IP 一推就到 9600 counts，8000 必然秒停。放开也没用 —— 阈值不是病根
+ * （驱动器压根不跟），只会让它滑得更远。真要再试 IP 先解决 SYNC。 */
+#define ADM_FOLLOW_ERR_MAX  (25000)
+#else
+#define ADM_FOLLOW_ERR_MAX  (25000)                 /* 17 deg，PP 已验证 */
+#endif
 
 #define ADM_POS_AGE_STOP    (200u)                  /* TPDO 200 ms 不来帧 -> 停机 */
 #define ADM_PP_FAIL_STOP    (5u)                    /* 换点连续失败 5 次 -> 停机 */
@@ -162,5 +254,15 @@ void    App_Joint_Adm_Stop(void);
 void    App_Joint_Adm_StopKey(void);
 void    App_Joint_Adm_Task(void);
 uint8_t App_Joint_Adm_IsBusy(void);
+
+/* ---- 运行时增益档位（KEY1 切换，A/B 对比手感用）----
+ * 三档 wn(1.51 Hz)、zeta(0.7) 都不变，只有 K 变，所以切的是"多硬"：
+ *   档 1 软  K=0.225 N.m/deg  45 deg 对应 10.1 N.m
+ *   档 2 中  K=0.300 N.m/deg  45 deg 对应 13.5 N.m   <- 默认
+ *   档 3 硬  K=0.400 N.m/deg  45 deg 对应 18.0 N.m
+ * 运行中可切，位置连续、力矩突变。 */
+uint8_t App_Joint_Adm_CycleGain(void);      /* 切下一档，返回 1..3 */
+uint8_t App_Joint_Adm_SetGain(uint8_t idx); /* 0..2 指定，返回实际档位 */
+uint8_t App_Joint_Adm_GetGain(void);        /* 0..2 */
 
 #endif

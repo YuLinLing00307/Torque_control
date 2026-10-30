@@ -22,8 +22,6 @@
 #define OD_HEARTBEAT_TIME       0x1017u     /* u16  rw   心跳周期 ms（0 = 关闭） */
 
 /* ---------------- PDO 配置 ---------------- */
-#define OD_RPDO1_COB            0x1400u     /* 子 01 = COB-ID，02 = 传输类型 */
-#define OD_RPDO1_MAP            0x1600u     /* 子 00 = 个数，01~08 = 映射对象 */
 #define OD_TPDO1_COB            0x1800u     /* 子 01 = COB-ID（bit30=1 表示未启用），02 = 传输类型 */
 #define OD_TPDO1_MAP            0x1A00u
 
@@ -63,7 +61,13 @@
 #define OD_FOLLOWING_ERR        0x6065u     /* u32  rw   位置跟随误差窗口，默认 10000 counts */
 #define OD_FOLLOWING_ERR_TIME   0x6066u     /* u16  rw   跟随误差超时 ms，默认 20 */
 #define OD_INTERP_TIME          0x60C2u     /* u8   rw   插补周期：子1=周期值，子2=指数(有符号)
-                                             * 实测 子1=1 子2=-3 -> 1 ms，必须改成 10 才和 100 Hz 写点对齐 */
+                                             * 实测 子1=1 子2=-3 -> 1 ms。
+                                             * 【别再改】曾改成 10 想"与写点周期对齐"，
+                                             * 依据只是"违约 10 倍"的推断，实测直接崩：
+                                             * 11.4 deg 稳态跟随误差、驱动器出力约 0、手感消失。
+                                             * 而 0x60C2=1 时 0x6062-目标 = 0、0x6064 只差
+                                             * 27~38 counts，本身就反驳了这个推断。
+                                             * **保持 1 ms。** */
 #define OD_POSITION_FACTOR      0x6093u     /* 位置单位换算分子/分母，默认 1/1 */
 #define OD_POSITION_INC         0x6063u     /* i32  ro   位置增量（内部单位） */
 
@@ -133,9 +137,6 @@
 #define CW_CSP_RUN              (CW_CSP_BASE | CW_NEW_SETPOINT)
 
 /* RPDO1 映射条目（对象字典索引 16 位 | 长度 8 位） */
-#define RPDO_MAP_CONTROLWORD    0x60400010u     /* 0x6040 控制字 16 bit */
-#define RPDO_MAP_TARGET_POS     0x607A0020u     /* 0x607A 目标位置 32 bit */
-#define RPDO_MAP_TARGET_VEL     0x60FF0020u     /* 0x60FF 目标速度 32 bit */
 
 /* ---- CSV 速度模式（2026-10-30 夜，实测后的决定）----
  * 三条实测事实：
@@ -148,6 +149,20 @@
  * 结论：位置口在这台驱动器上没有可用余量。CSV 没有跟随误差窗口，
  * 而且导纳控制本来就是"外力 -> 速度"的映射，输出速度是自然的接口。
  * 0x6060 是运行模式选择（和 0x6040 同属命令），不是电机出厂参数。 */
+/* ---- IP 插补位置模式（0x6060 = 7）----
+ * 2026-10-30 确认 0x6502 = 0x3ED，bit5(IP) = 1，这台驱动器支持。
+ *
+ * 为什么从 PP 换到 IP：
+ *   PP 每收一个新目标都按"到点停"重新规划 —— 从 0 加速到峰值再刹回 0。
+ *   40 ms 一个台阶 720 counts，剖面必然是峰值 sqrt(a*d) = 36000 counts/s 的
+ *   三角波，25 Hz 循环一次。功能全对（净漂移 0.027 deg、0 失败、不震），
+ *   但手上"一冲一停、不顺应"，而且这个三角剖面在 PP 里调参数调不掉。
+ *   IP 模式下驱动器按 0x60C2 自己插补，不做重规划，速度可以连续。
+ *
+ * 控制字：IP 不走 PP 那套 bit4/bit5 握手，恒 0x000F 即可。
+ *   若实测目标不跟随（fdb 不动），再试 0x1F 或 bit4 翻转。 */
+#define CW_IP_RUN               (CW_ENABLE_OPERATION)   /* 0x000F */
+
 #define JOINT_MODE_CSV          9
 #define CW_CSV_RUN              (CW_ENABLE_OPERATION)   /* 0x000F，CSV 不用 bit4/bit5 */
 
