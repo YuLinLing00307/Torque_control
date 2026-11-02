@@ -1,0 +1,9 @@
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\Keil_v5\ARM\ARMCC\Bin'
+Build target 'Torque_control'
+compiling dev_joint.c...
+..\Drivers\Devices\dev_joint.c(79): error:  #148: variable "s_tpdo1_cnt"  has already been initialized
+  static uint32_t s_tpdo1_cnt   = 0;   /* TPDO1 帧数：为 0 说明状态字通道没走通 */
+..\Drivers\Devices\dev_joint.c: 0 warnings, 1 error
+"Torque_control\Torque_control.axf" - 1 Error(s), 0 Warning(s).
+Target not created.
+Build Time Elapsed:  00:00:01

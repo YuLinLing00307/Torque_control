@@ -1,73 +1,70 @@
 #include "bsp_can.h"
 
+/* CAN1：32 位掩码模式，ID 和掩码全 0 = 全部放行（单节点总线不需要过滤） */
 void Bsp_Can_Init(void)
 {
-	/* 1. 配置筛选器 */
-    CAN_FilterTypeDef sFilterConfig = {0};                              // 过滤器配置结构体
-    sFilterConfig.FilterBank = 0;                                       // 筛选器组编号
-    sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;                   // 掩码模式
-    sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;                  // 32位模式
-    sFilterConfig.FilterIdHigh         =  0x0000;                       // ID(验证码)的高16位
-    sFilterConfig.FilterIdLow          =  0x0000;                       // ID(验证码)的低16位
-    sFilterConfig.FilterMaskIdHigh     =  0x0000;                       // 掩码高16位; 位匹配，位0-此位都通过、位1-此位需要与ID位相同
-    sFilterConfig.FilterMaskIdLow      =  0x0000;                       // 掩码低16位；位匹配，位0-此位都通过、位1-此位需要与ID位相同
-    sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;                  // 分配到 FIFO 0
-    sFilterConfig.FilterActivation = ENABLE;                            // 使能筛选器
-    sFilterConfig.SlaveStartFilterBank = 14;                            // 设置CAN2的筛选器起始编号; CAN1、CAN2共用28个筛选器(0~27)，默认情况下：CAN1用0~13、CAN2必须14~27。此值的设置范围14~27, 即必须14起步。因为CAN1、CAN2共用28个筛选器(0~27)，设置后，CAN1可用筛选器为(0~值-1), CAN2可用筛选器为(值~27); 标准库没有这个选项，CAN1默认0~13, CAN2默认14~27; 当使用寄存器操作时最自由，CAN1可以0~27, CAN2必须14~27。
- 
-    /* 2. 初始化筛选器 */
-    if (HAL_CAN_ConfigFilter(&hcan, &sFilterConfig) != HAL_OK)
-    {
-        printf("CAN1筛选器初始化失败！\r\n");
-        // Error_Handler();
-    }
- 
-    /* 3. 使能FIFO0接收中断 */
-    if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK)
-    {
-        printf("CAN1接收中断使能失败！\r\n");
-        // Error_Handler();
-    }
-	
+	CAN_FilterTypeDef sFilterConfig = {0};
+
+	sFilterConfig.FilterBank           = 0;
+	sFilterConfig.FilterMode           = CAN_FILTERMODE_IDMASK;
+	sFilterConfig.FilterScale          = CAN_FILTERSCALE_32BIT;
+	sFilterConfig.FilterIdHigh         = 0x0000;
+	sFilterConfig.FilterIdLow          = 0x0000;
+	sFilterConfig.FilterMaskIdHigh     = 0x0000;   /* 掩码位 0 = 该位不关心 */
+	sFilterConfig.FilterMaskIdLow      = 0x0000;
+	sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
+	sFilterConfig.FilterActivation     = ENABLE;
+	sFilterConfig.SlaveStartFilterBank = 14;       /* CAN2 起始 bank；本工程不用 CAN2，仅占位 */
+
+	if (HAL_CAN_ConfigFilter(&hcan, &sFilterConfig) != HAL_OK)
+	{
+		printf("CAN1 过滤器初始化失败！\r\n");
+	}
+
+	if (HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK)
+	{
+		printf("CAN1 接收中断使能失败！\r\n");
+	}
+
 	HAL_CAN_Start(&hcan);
 }
 
-
-uint8_t Bsp_Can_SendData(uint32_t type, uint32_t ID,uint8_t *msgData,uint8_t num)
+/* 发一帧标准帧或扩展帧。注意本函数会被 TIM3 中断调用。 */
+uint8_t Bsp_Can_SendData(uint32_t type, uint32_t ID, uint8_t *msgData, uint8_t num)
 {
-    // 定义两个变量
-    /* 改成局部变量：本函数会被 TIM3 中断调用，static 会和主循环互相踩。 */
-    CAN_TxHeaderTypeDef canTxHeader = {0};
-    uint32_t txMailbox = 0;
-                                                              
-    /* 限制数据的字节数 */                                    
-    if (num > 8)                                              // 判断字节是否超过8字节
-        num = 8;                                              // 如果超过8字节，只发送前8个字节
-                                                              
-    /* 1.配置帧信息 */                                        
-    if (type == CAN_ID_EXT)                                   // 扩展帧
-    {                                                         
-        canTxHeader.ExtId = ID ;                              // 扩展帧ID; 值有效范围：0x00000000~0x1FFFFFFF
-        canTxHeader.IDE   = CAN_ID_EXT;                       // 帧格式：扩展帧(CAN_ID_EXT); 此值是HAL库文件stm32f4xx_hal.h里的宏定义
-    }                                                         
-    else                                                      // 标准帧
-    {                                                         
-        canTxHeader.StdId = ID;                               // 帧ID; 值有效范围：0x000~0x7FF
-        canTxHeader.IDE   = CAN_ID_STD;                       // 帧格式: 标准帧(CAN_ID_STD); 此值是HAL库文件stm32f4xx_hal.h里的宏定义
-    }                                                         
-    canTxHeader.RTR   = CAN_RTR_DATA;                         // 数据帧
-    canTxHeader.DLC   = num;                                  // 数据字节数
-    canTxHeader.TransmitGlobalTime = DISABLE;                 // 使能时间戳添加到最后两个字节：Data[6]、Data[7]
-                                                              
-    /* 2.等待发送邮箱空闲 */    
-    /* 忙等计数，不能用 HAL_Delay：
-     * 本函数会被 TIM3 中断调用，而 TIM3 抢占优先级(1) 高于 SysTick(15)，
-     * 中断里 uwTick 不涨，HAL_Delay 永远返回不了，整机会卡死在这里。 */
-    volatile uint32_t guard = 20000u;
-    while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0)
-    {
-        if (--guard == 0u) return 3;
-    }
- 
-    return HAL_CAN_AddTxMessage(&hcan, &canTxHeader, msgData, &txMailbox);     // 返回发送状态; 成功-0、错误-1、忙错误-2、超时-3
+	/* 必须用局部变量：static 会被 TIM3 中断和主循环同时写，互相踩 */
+	CAN_TxHeaderTypeDef canTxHeader = {0};
+	uint32_t txMailbox = 0;
+	volatile uint32_t guard = 20000u;
+
+	if (num > 8)
+	{
+		num = 8;
+	}
+
+	if (type == CAN_ID_EXT)
+	{
+		canTxHeader.ExtId = ID;
+		canTxHeader.IDE   = CAN_ID_EXT;
+	}
+	else
+	{
+		canTxHeader.StdId = ID;
+		canTxHeader.IDE   = CAN_ID_STD;
+	}
+	canTxHeader.RTR = CAN_RTR_DATA;
+	canTxHeader.DLC = num;
+	canTxHeader.TransmitGlobalTime = DISABLE;
+
+	/* 等邮箱空。不能用 HAL_Delay：TIM3 抢占优先级(1) 高于 SysTick(15)，
+	 * 中断里 uwTick 不涨，HAL_Delay 永远返回不了，整机会卡死在这里。 */
+	while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0)
+	{
+		if (--guard == 0u)
+		{
+			return 3;
+		}
+	}
+
+	return HAL_CAN_AddTxMessage(&hcan, &canTxHeader, msgData, &txMailbox);
 }

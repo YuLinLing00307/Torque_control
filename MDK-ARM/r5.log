@@ -1,0 +1,15 @@
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\Keil_v5\ARM\ARMCC\Bin'
+Build target 'Torque_control'
+compiling dev_joint.c...
+..\Drivers\Devices\dev_joint.c(643): warning:  #1-D: last line of file ends without a newline
+  uint32_t Dev_Joint_Tpdo1Count(void)       { return s_tpdo1_cnt; }
+..\Drivers\Devices\dev_joint.c: 1 warning, 0 errors
+compiling app_joint.c...
+..\Drivers\APP\app_joint.c(1414): warning:  #1-D: last line of file ends without a newline
+  }
+..\Drivers\APP\app_joint.c: 1 warning, 0 errors
+linking...
+Program Size: Code=30344 RO-data=1392 RW-data=372 ZI-data=1452  
+FromELF: creating hex file...
+"Torque_control\Torque_control.axf" - 0 Error(s), 2 Warning(s).
+Build Time Elapsed:  00:00:01

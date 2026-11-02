@@ -3,128 +3,189 @@
 #include <math.h>
 #include <stdio.h>
 
-/* htim3 定义在 Core/Src/tim.c，main.h 里没有 extern，这里自己声明 */
+/* htim3 在 Core/Src/tim.c，main.h 里没有 extern，这里自己声明 */
 extern TIM_HandleTypeDef htim3;
 
 /* =====================================================================
- *  周期任务：目前只做 SDO 超时检测（Dev_Joint_Task）
- * ===================================================================== */
-void App_Joint_Task(void)
-{
-    Dev_Joint_Task();
-}
-
-/* =====================================================================
- *  导纳控制 · PP 位置流版（2026-10-30 定版）
+ *  导纳控制 · PP 位置流
  *
- *  为什么是 PP：
- *    CSP 1 kHz 点流实测驱动器恒定超前 350~410 counts，并多次跳 0x3230；
- *    CSV 速度口也压不住，且有嗡鸣。
- *    PP 位置流（每 20 ms 改一次 0x607A）连跑 400 点：0x603F 恒 0、
- *    TEC/REC/LEC 全 0、净漂移 40 counts(0.03 deg)、两跑逐点重合。
- *    所以导纳输出改走 PP，位置环仍然在驱动器内部闭环 —— 仍然是位控。
+ *  100 Hz 递推在 TIM3 ISR 里做，只算 pos_cmd，一帧 CAN 都不发：
+ *      M*acc + B*vel + K*(pos - pos_ref) = tau_ext
  *
- *  分工（硬约束，违反任何一条都会重演之前的事故）：
- *    TIM3 ISR 1 kHz —— 每 10 拍做一次浮点递推（100 Hz），只算 pos_cmd。
- *                      不发帧、不读 SDO、不打印、不 HAL_Delay。
- *    主循环 20 ms   —— PP 换点：0x0F -> 写 0x607A -> 0x3F（bit4 上升沿）。
- *                      三次阻塞 SDO 写，每次约 1 ms，50 Hz 下占主循环
- *                      不到 20%，NJ70 是 50 ms 一问一答，完全不受影响。
- *    位置反馈       —— TPDO1 映射 {0x6041, 0x6064}，0x1800.5 = 2 ms、
- *                      0x1800.3 = 0（抑制时间清零），实测约 500 帧/秒。
- *                      SDO 通道整个让给换点，运行期不再轮询 0x6064。
+ *  主循环 40 ms 把 (pos_cmd + 超前量) 写进 0x607A，三帧 SDO 换一个点：
+ *      0x0F (bit4=0) -> 写 0x607A -> 0x3F (bit4 上升沿 = 采信新点)
  *
- *  速度上限：PP 每个点都按"到点停"规划，能维持的稳态速度约为
- *            0x6083 * 换点周期 = 1e6 * 0.02 = 20000 counts/s，
- *            高于软件限速 ADM_VEL_MAX(8000)，所以 0x6083 不是瓶颈。
- *            实测代价是每拍约 v^2/(2a) = 32 counts 的规划滞后（0.02 deg）。
+ *  分工：
+ *      ISR    读力矩 -> 递推 -> 更新 s_adm_pos_tgt（含超前与限位钳位）
+ *      主循环 取 TPDO -> 换点 -> 看门狗 -> 打印
+ *  两边只通过 volatile 变量通信。ISR 里不碰 CAN / SDO / printf / HAL_Delay。
  * ===================================================================== */
 
+/* ---- 启动状态机 ---- */
 #define ADM_STEP_IDLE    0u
 #define ADM_STEP_RUN     30u
 
-#define ADM_STOP_NONE     0u
-#define ADM_STOP_KEY      1u    /* 按键主动停 */
-#define ADM_STOP_TAU      2u    /* 外力矩超限 */
-#define ADM_STOP_ERR      3u    /* 跟随误差超限 */
-#define ADM_STOP_PP       4u    /* PP 换点连续失败（SDO 不通） */
-#define ADM_STOP_FDB_LOST 5u    /* 位置反馈断流（TPDO 不来帧） */
-#define ADM_STOP_STEP     6u    /* 启动流程失败 */
-#define ADM_STOP_DRV_FAULT 7u   /* 驱动器自身进故障态（0x6041 bit3） */
+/* ---- 停机原因 ---- */
+#define ADM_STOP_NONE      0u
+#define ADM_STOP_KEY       1u    /* 按键主动停 */
+#define ADM_STOP_TAU       2u    /* 外力矩超限 */
+#define ADM_STOP_ERR       3u    /* 跟随误差超限 */
+#define ADM_STOP_PP        4u    /* PP 换点连续失败 */
+#define ADM_STOP_FDB_LOST  5u    /* TPDO 不来帧 */
+#define ADM_STOP_STEP      6u    /* 启动流程失败 */
+#define ADM_STOP_DRV_FAULT 7u    /* 驱动器自身故障（0x6041 bit3）*/
 
-/* 位置读数合理性校验：TPDO 上来的 0x6064 理论上不会有坏值，
- * 但节点重连、映射被改、半帧拼接时仍可能来一个离谱的数，
- * 一旦写进 s_adm_pos_fdb 会同时污染重力补偿和跟随误差判断。 */
+/* ---- 位置读数合理性校验：挡住节点重连 / 半帧拼接产生的离谱值 ---- */
 #define ADM_FDB_ABS_MAX      (1048576L)  /* +-2 圈 */
 #define ADM_FDB_COUNT_PER_MS (542L)      /* 270882 counts/s 的 2 倍 */
 #define ADM_FDB_SLACK_CNT    (2000L)
 
-static volatile uint8_t  s_adm_run     = 0u;   /* 1 = ISR 在递推 */
-static volatile float    s_adm_pos_cmd = 0.0f; /* 模型算出的位置（只给人看） */
-static volatile float    s_adm_pos_tgt = 0.0f; /* 实际写进 0x607A 的位置 = cmd + 超前量 */
-static volatile float    s_adm_lead_v  = 0.0f; /* 超前量用的速度，一阶低通，换向不硬跳 */
+/* ---- 扫角自检参数（重拟合重力矩时用，日常不跑）---- */
+#define TEST_STEP_MS       300u
+#define MOVE_TIMEOUT_MS   8000u
+#define PROFILE_VEL      20000u     /* 0x6081 轮廓速度 counts/s */
+#define PROFILE_ACC      50000u     /* 0x6083/0x6084 加减速度 */
+#define SCAN_POINTS        8        /* 采集点数 */
+#define SCAN_START_DEG    (-35.0f)  /* 起始角度，相对 pos0 */
+#define SCAN_STEP_DEG      10.0f    /* 点间隔 */
+#define SCAN_SETTLE_MS    1500u     /* 到位后稳定时间 */
+#define SCAN_SAMPLE_MS      50u     /* 力矩采样间隔 */
+
+/* =====================================================================
+ *  状态变量
+ * ===================================================================== */
+
+/* ---- 递推状态（ISR 写，主循环读）---- */
+static volatile uint8_t  s_adm_run       = 0u;
+static volatile uint32_t s_adm_beat      = 0u;
 static volatile float    s_adm_delta_pos = 0.0f;
 static volatile float    s_adm_delta_vel = 0.0f;
-static volatile float    s_adm_tau_grav  = 0.0f;
-/* ---- 运行时增益档位（KEY1 循环切，用于 A/B 对比手感）----
- * 三档只改软硬：M/B/K 同比例缩放，wn = sqrt(K/M) 和 zeta = B/(2*sqrt(K*M))
- * 都保持不变，所以响应快慢一样，切的就是"多硬"。
- * 基准来自 ADM_PRESET 选出的 ADM_M/B/K，改预设这三行会自动跟随。
- *   ADM_GAIN_SCALE 里 1.00 那一档必须与基准完全一致，所以默认停在 idx=1。
- *
- * 为什么不在 CycleGain 里直接写这三个变量：硬浮点写到一半被 TIM3 打断，
- * ISR 会读到半新半旧的 M/B/K（3 条指令的窗口，概率低但不是零）。
- * 所以 APP 侧只写一个 u8 请求位，ISR 在拍边界上一次性生效，
- * 顺便让切档时刻确定，冲击可复现。 */
-#define ADM_GAIN_LEVELS     3u
-static const float   s_adm_gain_scale[ADM_GAIN_LEVELS] = { 0.75f, 1.00f, 1.3333f };
-static volatile uint8_t s_adm_gain_req = 1u;   /* APP 侧请求的档位（0..2） */
-static uint8_t          s_adm_gain_cur = 1u;   /* ISR 侧已生效的档位 */
-static volatile float s_adm_m     = ADM_M;         /* 当前生效值，递推直接用 */
-static volatile float s_adm_b     = ADM_B;
-static volatile float s_adm_k     = ADM_K;
-static volatile float s_adm_inv_m = 1.0f / ADM_M;
-static void Adm_ApplyGain(uint8_t idx);        /* 实现见文件末尾 */
+static volatile float    s_adm_pos_cmd   = 0.0f;  /* 导纳模型算出的位置 */
+static volatile float    s_adm_pos_tgt   = 0.0f;  /* 实际写 0x607A = cmd + 超前量 */
+static volatile float    s_adm_lead_v    = 0.0f;  /* 超前量用的速度（低通后）*/
+static volatile float    s_adm_tau_grav  = 0.0f;  /* 当前姿态重力矩 */
 
-static volatile uint32_t s_adm_beat    = 0u;   /* 递推心跳 */
+/* ---- 增益档位 ----
+ * APP 侧只写 s_adm_gain_req，ISR 在拍边界一次性生效。直接写 M/B/K 的话，
+ * 浮点写到一半被 TIM3 打断，ISR 会读到半新半旧的参数组合。 */
+static const float      s_adm_gain_scale[ADM_GAIN_LEVELS] = { 0.75f, 1.00f, 1.3333f };
+static volatile uint8_t s_adm_gain_req = 1u;
+static uint8_t          s_adm_gain_cur = 1u;
+static volatile float   s_adm_m     = ADM_M;
+static volatile float   s_adm_b     = ADM_B;
+static volatile float   s_adm_k     = ADM_K;
+static volatile float   s_adm_inv_m = 1.0f / ADM_M;
 
-static volatile int32_t  s_adm_pos_ref = 0;    /* 平衡位置 = 使能后位置，运行中不改 */
-static int32_t  s_adm_pos_home  = 0;           /* 软限位基准 */
-static uint8_t  s_adm_step      = ADM_STEP_IDLE;
-static uint32_t s_adm_step_t    = 0u;
-static uint32_t s_adm_mon_t     = 0u;          /* 20 ms 主节拍 */
-static uint32_t s_adm_print_t   = 0u;
-static uint32_t s_adm_run_t0    = 0u;
-static uint32_t s_adm_pos_t     = 0u;          /* 上次收到 TPDO 位置帧的时刻 */
-static int32_t  s_adm_pos_fdb   = 0;
-static uint32_t s_adm_tpdo_lc   = 0u;          /* 上一帧 TPDO 序号，判新帧 */
-static uint8_t  s_adm_fdb_valid = 0u;
-static uint16_t s_adm_sw        = 0xFFFFu;     /* TPDO 带来的 0x6041 */
-static uint16_t s_adm_sw_last   = 0xFFFFu;
-static uint8_t  s_adm_stop_rsn  = ADM_STOP_NONE;
-static uint8_t  s_adm_tau_cnt   = 0u;
-static uint8_t  s_adm_err_cnt   = 0u;
+/* ---- 位置反馈 ---- */
+static volatile int32_t s_adm_pos_ref   = 0;      /* 平衡位置，启动时定 */
+static int32_t          s_adm_pos_home  = 0;      /* 软限位基准 */
+static int32_t          s_adm_pos_fdb   = 0;
+static uint32_t         s_adm_pos_t     = 0u;     /* 上次收到位置帧的时刻 */
+static uint32_t         s_adm_tpdo_lc   = 0u;     /* 上一帧 TPDO 计数，判新帧 */
+static uint8_t          s_adm_fdb_valid = 0u;
+static uint16_t         s_adm_sw        = 0xFFFFu;  /* 0x6041，来自 TPDO */
+static uint16_t         s_adm_sw_last   = 0xFFFFu;
 
-static volatile int32_t s_adm_tgt_prev = 0;    /* 上一拍指令，量单拍跳变 */
+/* ---- 状态机与节拍 ---- */
+static uint8_t  s_adm_step     = ADM_STEP_IDLE;
+static uint32_t s_adm_step_t   = 0u;
+static uint32_t s_adm_mon_t    = 0u;              /* 40 ms 主节拍 */
+static uint32_t s_adm_print_t  = 0u;
+static uint32_t s_adm_run_t0   = 0u;
+static uint8_t  s_adm_stop_rsn = ADM_STOP_NONE;
+static uint8_t  s_adm_tau_cnt  = 0u;              /* 外力矩连续超限计数 */
+static uint8_t  s_adm_err_cnt  = 0u;              /* 跟随误差连续超限计数 */
+static uint8_t  s_adm_mode_old = 8u;
+static uint32_t s_adm_drv_err  = 0u;              /* 0x603F */
+
+/* ---- PP 换点 ---- */
+static int32_t  s_adm_pp_sent = 0;                /* 上次被采信的 0x607A */
+static uint32_t s_adm_pp_ok   = 0u;
+static uint32_t s_adm_pp_bad  = 0u;
+static uint8_t  s_adm_pp_fail = 0u;               /* 连续失败计数 */
+
+/* ---- 静态保持自检 ---- */
+static uint8_t  s_adm_hold   = 0u;
+static uint32_t s_adm_hold_t = 0u;
+
+/* ---- 峰值统计（停机汇总）---- */
+static volatile int32_t s_adm_tgt_prev = 0;
 static volatile int32_t s_adm_jump_pk  = 0;
 static volatile int32_t s_adm_err_pk   = 0;
 
-/* ---- PP 换点状态 ---- */
-static int32_t  s_adm_pp_sent   = 0;   /* 上一次被驱动器采信的 0x607A */
-static uint32_t s_adm_pp_ok     = 0u;  /* 成功换点次数 */
-static uint32_t s_adm_pp_bad    = 0u;  /* 失败次数 */
-static uint8_t  s_adm_pp_fail   = 0u;  /* 连续失败计数 */
+/* ---- 打印缓存 ---- */
+static int32_t s_adm_tq_pm    = 0;                /* 0x6077 permille 额定 */
+static int32_t s_adm_vel_fb   = 0;                /* 0x606C counts/s */
+static int32_t s_adm_tau_echo = 0;                /* 外力矩 mN.m */
 
-/* ---- 静态保持自检 ---- */
-static uint8_t  s_adm_hold      = 0u;
-static uint32_t s_adm_hold_t    = 0u;
+/* ---- 扫角自检 ---- */
+static int32_t  s_pos0     = 0;
+static int32_t  s_target   = 0;
+static uint32_t s_move_t   = 0;
+static uint8_t  s_scan_i   = 0;
+static uint32_t s_settle_t = 0;
+static float    s_sum_tau  = 0.0f;
+static uint16_t s_cnt_tau  = 0;
+static uint32_t s_t0       = 0;
 
-/* ---- 打印用的驱动器自述量，500 ms 刷新一次 ---- */
-static int32_t  s_adm_tq_pm     = 0;   /* 0x6077 实际力矩 ‰额定 */
-static int32_t  s_adm_vel_fb    = 0;   /* 0x606C 实际速度 counts/s */
-static int32_t  s_adm_tau_echo  = 0;   /* 打印用的外力矩 mN.m */
-static uint32_t s_adm_drv_err   = 0u;  /* 0x603F */
-static uint8_t  s_adm_mode_old  = 8u;
+static void Adm_ApplyGain(uint8_t idx);
+/* =====================================================================
+ *  一、底层 IO（阻塞，只在主循环里调）
+ * ===================================================================== */
+
+/* =====================================================================
+ *  导纳控制 · SDO 薄封装（阻塞，只在主循环里用）
+ * ===================================================================== */
+static uint8_t Adm_Wr(uint16_t index, uint8_t sub, uint32_t value, uint8_t width)
+{
+    return Dev_Joint_SdoWriteBlock(index, sub, value, width);
+}
+
+static uint8_t Adm_Rd(uint16_t index, uint8_t sub, uint32_t *value)
+{
+    return Dev_Joint_SdoReadBlock(index, sub, value, 60u);
+}
+
+/* =====================================================================
+ *  导纳控制 · 启动流程
+ *  20 ms 一步的非阻塞状态机，任何一步失败都走 Adm_Fail 收尾。
+ * ===================================================================== */
+static void Adm_Fail(const char *why)
+{
+    printf("[FAIL] %s\r\n", why);
+    s_adm_stop_rsn = ADM_STOP_STEP;
+    s_adm_step     = ADM_STEP_IDLE;
+    s_adm_run      = 0u;
+    Dev_Joint_SetPosFreeze(0u);
+}
+
+/* 把 0x603F 故障码翻成人话 */
+static const char *Adm_DrvFaultName(uint32_t code)
+{
+    switch (code & 0xFFFFu)
+    {
+    case 0x0000u: return "无故障";
+    case 0x2310u: return "过流";
+    case 0x2311u: return "过流(2)";
+    case 0x3210u: return "过压";
+    case 0x3220u: return "欠压";
+    case 0x3230u: return "功率级/母线异常";
+    case 0x4210u: return "过热";
+    case 0x7305u: return "编码器故障";
+    case 0x7500u: return "通信/存储故障";
+    case 0x8110u: return "CAN 接收溢出";
+    case 0x8120u: return "CAN 被动错误";
+    case 0x8130u: return "心跳丢失";
+    case 0x8400u: return "速度环错误";
+    case 0x8611u: return "跟随误差过大";
+    case 0x8612u: return "指令超限/参考点";
+    case 0xFF00u: return "厂商自定义故障";
+    default:      return "其他(查手册)";
+    }
+}
+/* =====================================================================
+ *  二、位置反馈
+ * ===================================================================== */
 
 /* ---------------------------------------------------------------------
  *  位置读数是否可信
@@ -146,6 +207,83 @@ static uint8_t Adm_PosAccept(int32_t now)
     if (d > lim || d < -lim) return 0u;
 
     return 1u;
+}
+
+/* ---------------------------------------------------------------------
+ *  从 TPDO 取位置与状态字。没有新帧时什么都不做 ——
+ *  一帧都没来过时绝不能把 0 当位置。
+ * ------------------------------------------------------------------- */
+static void Adm_PollTpdo(void)
+{
+    uint32_t c = Dev_Joint_TpdoPosCount();
+
+    if (c != s_adm_tpdo_lc)
+    {
+        s_adm_tpdo_lc = c;
+
+        int32_t p = Dev_Joint_TpdoGetPos();
+
+        if (Adm_PosAccept(p) != 0u)
+        {
+            s_adm_pos_fdb   = p;
+            s_adm_pos_t     = uwTick;
+            s_adm_fdb_valid = 1u;
+        }
+        s_adm_sw = Dev_Joint_Status();
+    }
+}
+/* ---- PP 换点：两种机制由 ADM_USE_IP 选择 ---- */
+
+/* ---------------------------------------------------------------------
+ *  换点。两种机制由 ADM_USE_IP 选择，逻辑完全不同：
+ *
+ *  IP（0x6060=7）：只写 0x607A，控制字恒 0x000F。
+ *     驱动器按 0x60C2(1 ms) 自己插补过去，**不做"到点停"重规划**，
+ *     所以没有 PP 那个 25 Hz 的速度三角，运动是连续的。
+ *     只要一条 SDO，换点从约 3 ms 降到约 1 ms。
+ *
+ *  PP（0x6060=1）：0x0F(bit4=0) -> 写 0x607A -> 0x3F(bit4 上升沿 = 采信新点)。
+ *     位置流测试里连跑 400 点零失败，也是现在这版的保底路径。
+ * ------------------------------------------------------------------- */
+static uint8_t Adm_PpSend(int32_t tgt)
+{
+#if (ADM_USE_IP != 0u)
+    if (!Adm_Wr(OD_TARGET_POSITION, 0u, (uint32_t)tgt, 4u)) return 0u;
+
+    s_adm_pp_sent = tgt;
+    return 1u;
+#else
+    if (!Adm_Wr(OD_CONTROLWORD, 0u, CW_ENABLE_OPERATION, 2u)) return 0u;
+    HAL_Delay(1u);                       /* 给驱动器清 bit12 的时间，实测 400 点无失败 */
+    if (!Adm_Wr(OD_TARGET_POSITION, 0u, (uint32_t)tgt, 4u))   return 0u;
+    HAL_Delay(1u);
+    if (!Adm_Wr(OD_CONTROLWORD, 0u, CW_CSP_RUN, 2u))          return 0u;
+
+    s_adm_pp_sent = tgt;
+    return 1u;
+#endif
+}
+/* =====================================================================
+ *  三、控制核心：100 Hz 递推 + TIM3 中断
+ * ===================================================================== */
+
+/* =====================================================================
+ *  运行时增益档位
+ *  KEY1 -> App_Joint_Adm_CycleGain() -> 只写请求位 -> ISR 拍边界生效
+ * ===================================================================== */
+static void Adm_ApplyGain(uint8_t idx)
+{
+    float sc;
+
+    if (idx >= ADM_GAIN_LEVELS) idx = 0u;
+    sc = s_adm_gain_scale[idx];
+
+    s_adm_m     = ADM_M * sc;
+    s_adm_b     = ADM_B * sc;
+    s_adm_k     = ADM_K * sc;
+    s_adm_inv_m = 1.0f / s_adm_m;      /* 一次除法，只在切档那一拍做 */
+
+    s_adm_gain_cur = idx;
 }
 
 /* ---------------------------------------------------------------------
@@ -268,390 +406,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
     App_Joint_Adm_Isr();
 }
-
 /* =====================================================================
- *  重力矩补偿
- *  拟合式 tau = A*cos(theta) + B*sin(theta) + C，theta 由位置 counts 换算。
+ *  四、启动流程（20 ms 一步的非阻塞状态机）
  * ===================================================================== */
-
-float App_Joint_GetGravityTorque(int32_t pos)
-{
-    float th = POS_TO_RAD(pos);
-    return GRAV_A * cosf(th) + GRAV_B * sinf(th) + GRAV_C;
-}
-
-/* =====================================================================
- *  扫角自检（调试专用）：PP 模式从 pos0-35 走 8 点到 pos0+35，
- *  每点等 bit10 -> 稳 1.5 s -> 每 50 ms 采一次力矩取平均。
- *  输出 DATA,idx,target_deg,act_deg,counts,torque_Nm
- *  拟合：tau = a*cos(theta) + b*sin(theta) + c
- * ===================================================================== */
-#define TEST_STEP_MS       300u     /* 状态机步进间隔 */
-#define MOVE_TIMEOUT_MS   8000u     /* 单点移动超时 */
-
-#define PROFILE_VEL      20000u     /* 0x6081 轮廓速度 counts/s = 13.7 deg/s */
-#define PROFILE_ACC      50000u     /* 0x6083/0x6084 加减速度 counts/s^2 */
-
-/* ---- 重力矩扫角采集参数 ---- */
-#define SCAN_POINTS        8        /* 采集点数 */
-#define SCAN_START_DEG    (-35.0f)  /* 起始角度，相对 pos0 */
-#define SCAN_STEP_DEG      10.0f    /* 点间隔 */
-#define SCAN_SETTLE_MS    1500u     /* 到位后稳定时间，等静差收敛 */
-#define SCAN_SAMPLE_MS      50u     /* 力矩采样间隔 */
-
-static int32_t  s_pos0     = 0;      /* 使能时的起始位置 */
-static int32_t  s_target   = 0;      /* 当前目标 */
-static uint32_t s_move_t   = 0;      /* 本次移动开始时刻 */
-static uint8_t  s_scan_i   = 0;      /* 当前扫角点序号 */
-static uint32_t s_settle_t = 0;      /* 稳定期起点 */
-static float    s_sum_tau  = 0.0f;   /* 力矩累加 */
-static uint16_t s_cnt_tau  = 0;      /* 力矩样本数 */
-static uint32_t s_t0       = 0;      /* 首次进入 case 0 的时刻 */
-
-/* ---------------------------------------------------------------------
- *  重力矩扫角采集（PP 模式，0x6060 = 1）
- *
- *  流程：切 PP -> 设轮廓速度/加减速 -> 目标 = 当前位置 -> 06/07/0F 使能
- *        -> 依次走到 pos0-35 到 pos0+35 共 8 个点
- *        -> 每点等 bit10 后再稳 1.5 s，期间每 50 ms 采一次力矩取平均
- *
- *  输出：DATA,idx,target_deg,act_deg,counts,torque_Nm
- *  拟合用实测角度 act_deg，不用 target_deg（位置环有约 1.5 deg 静差）
- * ------------------------------------------------------------------- */
-void App_Joint_GravScan_Task(void)
-{
-    static uint8_t  step   = 0;
-    static uint32_t tick   = 0;
-    uint32_t v      = 0;
-    uint32_t period = 0;
-    int32_t  pos    = 0;
-    uint16_t sw     = 0;
-    float    deg    = 0.0f;
-
-    if (step == 99u) return;
-
-    /* 采样阶段要快，其他阶段按 300 ms 节拍 */
-    period = (step == 13u) ? SCAN_SAMPLE_MS : TEST_STEP_MS;
-    if (uwTick - tick < period) return;
-    tick = uwTick;
-
-    switch (step)
-    {
-    case 0:     /* 等首帧力矩，再读状态字和起始位置 */
-        if (s_t0 == 0u) s_t0 = uwTick;
-        if (torque_first_flag == 0u)
-        {
-            if ((uwTick - s_t0) > 15000u)
-            {
-                printf("\r\n[FAIL] 传感器 15 s 没收到有效帧，App_NJ70_Task() 在跑吗\r\n");
-                step = 99u;
-            }
-            return;
-        }
-
-        printf("\r\n---- 重力矩扫角采集（PP 模式）----\r\n");
-
-        if (!Dev_Joint_SdoReadBlock(OD_STATUSWORD, 0, &v, 100))
-        {
-            printf("[FAIL] 读状态字超时\r\n");
-            step = 99u;
-            return;
-        }
-        printf("状态字 0x%04lX\r\n", (unsigned long)v);
-
-        if (!Dev_Joint_SdoReadBlock(OD_POSITION_ACTUAL, 0, &v, 100))
-        {
-            printf("[FAIL] 读位置超时\r\n");
-            step = 99u;
-            return;
-        }
-        s_pos0 = (int32_t)v;
-        printf("起始位置 %ld counts  (%.2f deg)\r\n",
-               (long)s_pos0, (double)COUNT_TO_DEG(s_pos0));
-        printf("扫角范围 %+.1f ~ %+.1f deg，共 %u 点，每点停 %u ms\r\n",
-               (double)SCAN_START_DEG,
-               (double)(SCAN_START_DEG + (SCAN_POINTS - 1) * SCAN_STEP_DEG),
-               (unsigned)SCAN_POINTS, (unsigned)SCAN_SETTLE_MS);
-        printf("当前读数 %.4f N.m（原始值，零偏会进拟合的 c）\r\n",
-               (double)torque);
-        step = 1u;
-        break;
-
-    case 1:     /* 切 PP */
-        if (!Dev_Joint_SdoWriteBlock(OD_MODES_OF_OPERATION, 0, JOINT_MODE_PP, 1))
-        {
-            printf("[FAIL] 写 0x6060=1 失败  abort=0x%08lX\r\n",
-                   (unsigned long)Dev_Joint_SdoAbortCode());
-            step = 99u;
-            return;
-        }
-        step = 2u;
-        break;
-
-    case 2:     /* 确认模式 */
-        if (!Dev_Joint_SdoReadBlock(OD_MODE_DISPLAY, 0, &v, 100))
-        {
-            printf("[FAIL] 读 0x6061 超时\r\n");
-            step = 99u;
-            return;
-        }
-        printf("当前模式 %d\r\n", (int)(int8_t)v);
-        if ((int8_t)v != JOINT_MODE_PP)
-        {
-            printf("[FAIL] 模式没有切到 1(PP)\r\n");
-            step = 99u;
-            return;
-        }
-        step = 3u;
-        break;
-
-    case 3:     /* 轮廓速度 */
-        if (!Dev_Joint_SdoWriteBlock(OD_PROFILE_VELOCITY, 0, PROFILE_VEL, 4))
-        {
-            printf("[FAIL] 写 0x6081 失败\r\n");
-            step = 99u;
-            return;
-        }
-        printf("轮廓速度 %u counts/s (%.1f deg/s)\r\n",
-               (unsigned int)PROFILE_VEL, (double)COUNT_TO_DEG((int32_t)PROFILE_VEL));
-        step = 4u;
-        break;
-
-    case 4:     /* 加速度 */
-        if (!Dev_Joint_SdoWriteBlock(OD_PROFILE_ACCEL, 0, PROFILE_ACC, 4))
-        {
-            printf("[FAIL] 写 0x6083 失败\r\n");
-            step = 99u;
-            return;
-        }
-        step = 5u;
-        break;
-
-    case 5:     /* 减速度 */
-        if (!Dev_Joint_SdoWriteBlock(OD_PROFILE_DECEL, 0, PROFILE_ACC, 4))
-        {
-            printf("[FAIL] 写 0x6084 失败\r\n");
-            step = 99u;
-            return;
-        }
-        printf("加减速度 %u counts/s^2\r\n", (unsigned int)PROFILE_ACC);
-        step = 6u;
-        break;
-
-    case 6:     /* 目标 = 当前位置，避免使能瞬间跳 */
-        s_target = s_pos0;
-        if (!Dev_Joint_SdoWriteBlock(OD_TARGET_POSITION, 0, (uint32_t)s_target, 4))
-        {
-            printf("[FAIL] 写 0x607A 失败\r\n");
-            step = 99u;
-            return;
-        }
-        step = 7u;
-        break;
-
-    case 7:     /* Shutdown */
-        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_SHUTDOWN, 2);
-        step = 8u;
-        break;
-
-    case 8:     /* Switch On */
-        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_SWITCH_ON, 2);
-        step = 9u;
-        break;
-
-    case 9:     /* Enable Operation */
-        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_ENABLE_OPERATION, 2);
-        step = 10u;
-        break;
-
-    case 10:    /* 确认使能 */
-        if (!Dev_Joint_SdoReadBlock(OD_STATUSWORD, 0, &v, 100))
-        {
-            printf("[FAIL] 读状态字超时\r\n");
-            step = 99u;
-            return;
-        }
-        printf("状态字 0x%04lX  状态位 0x%02lX\r\n",
-               (unsigned long)v, (unsigned long)(v & SW_MASK_STATE));
-
-        if ((v & SW_MASK_STATE) != SW_STATE_ENABLED)
-        {
-            printf("[FAIL] 没进 Operation enabled(0x27)\r\n");
-            printf("       查 STO_IN(PIN1)/STO_COM(PIN2) 是否短接、48V 是否到位\r\n");
-            step = 99u;
-            return;
-        }
-
-        printf("[ OK ] 已使能，开始扫角\r\n");
-        printf("DATA,idx,target_deg,act_deg,counts,tau_Nm\r\n");
-        s_scan_i = 0u;
-        step = 11u;
-        break;
-
-    case 11:    /* 发第 s_scan_i 个点 */
-        if (s_scan_i >= SCAN_POINTS)
-        {
-            step = 14u;
-            break;
-        }
-        deg = SCAN_START_DEG + (float)s_scan_i * SCAN_STEP_DEG;
-        s_target = s_pos0 + DEG_TO_COUNT(deg);
-
-        Dev_Joint_SdoWriteBlock(OD_TARGET_POSITION, 0, (uint32_t)s_target, 4);
-        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_ENABLE_OPERATION, 2);                    /* bit4 = 0 */
-        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_ENABLE_OPERATION | CW_NEW_SETPOINT, 2);  /* bit4 上升沿 */
-
-        printf("--> 第 %u 点  目标 %+6.1f deg  (%+8ld)\r\n",
-               (unsigned)s_scan_i, (double)deg, (long)s_target);
-        s_move_t = uwTick;
-        step = 12u;
-        break;
-
-    case 12:    /* 等到位：先等 600ms 让 bit10 确实清 0 */
-        if ((uwTick - s_move_t) < 600u) break;
-
-        if (!Dev_Joint_SdoReadBlock(OD_STATUSWORD, 0, &v, 100))
-        {
-            printf("[WARN] 读状态字超时，跳过第 %u 点\r\n", (unsigned)s_scan_i);
-            s_scan_i++;
-            step = 11u;
-            break;
-        }
-        sw = (uint16_t)v;
-
-        if ((sw & 0x0400u) != 0u)           /* bit10 target reached */
-        {
-            s_settle_t = uwTick;
-            s_sum_tau  = 0.0f;
-            s_cnt_tau  = 0u;
-            step = 13u;
-            break;
-        }
-        if ((uwTick - s_move_t) > MOVE_TIMEOUT_MS)
-        {
-            printf("[WARN] 第 %u 点超时未到位，跳过\r\n", (unsigned)s_scan_i);
-            s_scan_i++;
-            step = 11u;
-        }
-        break;
-
-    case 13:    /* 稳定期采样，50ms 一次 */
-        s_sum_tau += torque;
-        s_cnt_tau++;
-
-        if ((uwTick - s_settle_t) < SCAN_SETTLE_MS) break;
-
-        if (!Dev_Joint_SdoReadBlock(OD_POSITION_ACTUAL, 0, &v, 100))
-        {
-            printf("[WARN] 第 %u 点读位置超时\r\n", (unsigned)s_scan_i);
-            s_scan_i++;
-            step = 11u;
-            break;
-        }
-        pos = (int32_t)v;
-        printf("DATA,%u,%.2f,%.2f,%ld,%.4f\r\n",
-               (unsigned)s_scan_i,
-               (double)(SCAN_START_DEG + (float)s_scan_i * SCAN_STEP_DEG),
-               (double)COUNT_TO_DEG(pos),
-               (long)pos,
-               s_cnt_tau ? (double)(s_sum_tau / (float)s_cnt_tau) : 0.0);
-
-        s_scan_i++;
-        step = 11u;
-        break;
-
-    case 14:    /* 汇总 */
-        printf("---- 采集结束，共 %u 点 ----\r\n", (unsigned)SCAN_POINTS);
-        printf("把 DATA 行贴出来，拟合 tau = a*cos(theta) + b*sin(theta) + c\r\n");
-        printf("其中 c = 传感器零偏 + 装夹预紧，与角度无关\r\n");
-        step = 99u;
-        break;
-
-    default:
-        step = 99u;
-        break;
-    }
-}
-
-/* =====================================================================
- *  导纳控制 · SDO 薄封装（阻塞，只在主循环里用）
- * ===================================================================== */
-static uint8_t Adm_Wr(uint16_t index, uint8_t sub, uint32_t value, uint8_t width)
-{
-    return Dev_Joint_SdoWriteBlock(index, sub, value, width);
-}
-
-static uint8_t Adm_Rd(uint16_t index, uint8_t sub, uint32_t *value)
-{
-    return Dev_Joint_SdoReadBlock(index, sub, value, 60u);
-}
-
-/* ---------------------------------------------------------------------
- *  换点。两种机制由 ADM_USE_IP 选择，逻辑完全不同：
- *
- *  IP（0x6060=7）：只写 0x607A，控制字恒 0x000F。
- *     驱动器按 0x60C2(1 ms) 自己插补过去，**不做"到点停"重规划**，
- *     所以没有 PP 那个 25 Hz 的速度三角，运动是连续的。
- *     只要一条 SDO，换点从约 3 ms 降到约 1 ms。
- *
- *  PP（0x6060=1）：0x0F(bit4=0) -> 写 0x607A -> 0x3F(bit4 上升沿 = 采信新点)。
- *     位置流测试里连跑 400 点零失败，也是现在这版的保底路径。
- * ------------------------------------------------------------------- */
-static uint8_t Adm_PpSend(int32_t tgt)
-{
-#if (ADM_USE_IP != 0u)
-    if (!Adm_Wr(OD_TARGET_POSITION, 0u, (uint32_t)tgt, 4u)) return 0u;
-
-    s_adm_pp_sent = tgt;
-    return 1u;
-#else
-    if (!Adm_Wr(OD_CONTROLWORD, 0u, CW_ENABLE_OPERATION, 2u)) return 0u;
-    HAL_Delay(1u);                       /* 给驱动器清 bit12 的时间，实测 400 点无失败 */
-    if (!Adm_Wr(OD_TARGET_POSITION, 0u, (uint32_t)tgt, 4u))   return 0u;
-    HAL_Delay(1u);
-    if (!Adm_Wr(OD_CONTROLWORD, 0u, CW_CSP_RUN, 2u))          return 0u;
-
-    s_adm_pp_sent = tgt;
-    return 1u;
-#endif
-}
-
-/* ---------------------------------------------------------------------
- *  从 TPDO 取位置与状态字。没有新帧时什么都不做 ——
- *  一帧都没来过时绝不能把 0 当位置。
- * ------------------------------------------------------------------- */
-static void Adm_PollTpdo(void)
-{
-    uint32_t c = Dev_Joint_TpdoPosCount();
-
-    if (c != s_adm_tpdo_lc)
-    {
-        s_adm_tpdo_lc = c;
-
-        int32_t p = Dev_Joint_TpdoGetPos();
-
-        if (Adm_PosAccept(p) != 0u)
-        {
-            s_adm_pos_fdb   = p;
-            s_adm_pos_t     = uwTick;
-            s_adm_fdb_valid = 1u;
-        }
-        s_adm_sw = Dev_Joint_Status();
-    }
-}
-
-/* =====================================================================
- *  导纳控制 · 启动流程
- *  20 ms 一步的非阻塞状态机，任何一步失败都走 Adm_Fail 收尾。
- * ===================================================================== */
-static void Adm_Fail(const char *why)
-{
-    printf("[FAIL] %s\r\n", why);
-    s_adm_stop_rsn = ADM_STOP_STEP;
-    s_adm_step     = ADM_STEP_IDLE;
-    s_adm_run      = 0u;
-    Dev_Joint_SetPosFreeze(0u);
-}
 
 static void App_Joint_Adm_Step(void)
 {
@@ -996,38 +753,9 @@ void App_Joint_Adm_Start(void)
     s_adm_hold    = 0u;
     s_adm_pp_sent = 0;
 }
-
-/* 把 0x603F 故障码翻成人话 */
-static const char *Adm_DrvFaultName(uint32_t code)
-{
-    switch (code & 0xFFFFu)
-    {
-    case 0x0000u: return "无故障";
-    case 0x2310u: return "过流";
-    case 0x2311u: return "过流(2)";
-    case 0x3210u: return "过压";
-    case 0x3220u: return "欠压";
-    case 0x3230u: return "功率级/母线异常";
-    case 0x4210u: return "过热";
-    case 0x7305u: return "编码器故障";
-    case 0x7500u: return "通信/存储故障";
-    case 0x8110u: return "CAN 接收溢出";
-    case 0x8120u: return "CAN 被动错误";
-    case 0x8130u: return "心跳丢失";
-    case 0x8400u: return "速度环错误";
-    case 0x8611u: return "跟随误差过大";
-    case 0x8612u: return "指令超限/参考点";
-    case 0xFF00u: return "厂商自定义故障";
-    default:      return "其他(查手册)";
-    }
-}
-
-/* 按键主动停机：单独一个入口，只为了把停机原因写成"按键" */
-void App_Joint_Adm_StopKey(void)
-{
-    s_adm_stop_rsn = ADM_STOP_KEY;
-    App_Joint_Adm_Stop();
-}
+/* =====================================================================
+ *  五、停机与查询
+ * ===================================================================== */
 
 void App_Joint_Adm_Stop(void)
 {
@@ -1151,10 +879,21 @@ void App_Joint_Adm_Stop(void)
     s_adm_stop_rsn = ADM_STOP_NONE;
 }
 
+/* 按键主动停机：单独一个入口，只为了把停机原因写成"按键" */
+void App_Joint_Adm_StopKey(void)
+{
+    s_adm_stop_rsn = ADM_STOP_KEY;
+    App_Joint_Adm_Stop();
+}
+
 uint8_t App_Joint_Adm_IsBusy(void)
 {
     return (s_adm_step != ADM_STEP_IDLE) ? 1u : 0u;
 }
+/* =====================================================================
+ *  六、主循环任务
+ *  启动阶段 20 ms 一步；运行阶段 40 ms 一拍：取 TPDO -> 换点 -> 看门狗 -> 打印
+ * ===================================================================== */
 
 /* =====================================================================
  *  导纳控制 · 主循环任务
@@ -1334,25 +1073,9 @@ void App_Joint_Adm_Task(void)
                (long)s_adm_tq_pm, (long)s_adm_vel_fb);
     }
 }
-
 /* =====================================================================
- *  运行时增益档位
- *  KEY1 -> App_Joint_Adm_CycleGain() -> 只写请求位 -> ISR 拍边界生效
+ *  七、增益档位（KEY1 调用）
  * ===================================================================== */
-static void Adm_ApplyGain(uint8_t idx)
-{
-    float sc;
-
-    if (idx >= ADM_GAIN_LEVELS) idx = 0u;
-    sc = s_adm_gain_scale[idx];
-
-    s_adm_m     = ADM_M * sc;
-    s_adm_b     = ADM_B * sc;
-    s_adm_k     = ADM_K * sc;
-    s_adm_inv_m = 1.0f / s_adm_m;      /* 一次除法，只在切档那一拍做 */
-
-    s_adm_gain_cur = idx;
-}
 
 uint8_t App_Joint_Adm_GetGain(void)
 {
@@ -1399,4 +1122,293 @@ uint8_t App_Joint_Adm_CycleGain(void)
            (App_Joint_Adm_IsBusy() != 0u) ? "  [运行中，下一拍生效]" : "");
 
     return (uint8_t)(idx + 1u);
+}
+/* =====================================================================
+ *  八、重力矩补偿与扫角自检
+ * ===================================================================== */
+
+/* =====================================================================
+ *  重力矩补偿
+ *  拟合式 tau = A*cos(theta) + B*sin(theta) + C，theta 由位置 counts 换算。
+ * ===================================================================== */
+
+float App_Joint_GetGravityTorque(int32_t pos)
+{
+    float th = POS_TO_RAD(pos);
+    return GRAV_A * cosf(th) + GRAV_B * sinf(th) + GRAV_C;
+}
+/* ---------------------------------------------------------------------
+ *  重力矩扫角采集（PP 模式，0x6060 = 1）
+ *
+ *  流程：切 PP -> 设轮廓速度/加减速 -> 目标 = 当前位置 -> 06/07/0F 使能
+ *        -> 依次走到 pos0-35 到 pos0+35 共 8 个点
+ *        -> 每点等 bit10 后再稳 1.5 s，期间每 50 ms 采一次力矩取平均
+ *
+ *  输出：DATA,idx,target_deg,act_deg,counts,torque_Nm
+ *  拟合用实测角度 act_deg，不用 target_deg（位置环有约 1.5 deg 静差）
+ * ------------------------------------------------------------------- */
+void App_Joint_GravScan_Task(void)
+{
+    static uint8_t  step   = 0;
+    static uint32_t tick   = 0;
+    uint32_t v      = 0;
+    uint32_t period = 0;
+    int32_t  pos    = 0;
+    uint16_t sw     = 0;
+    float    deg    = 0.0f;
+
+    if (step == 99u) return;
+
+    /* 采样阶段要快，其他阶段按 300 ms 节拍 */
+    period = (step == 13u) ? SCAN_SAMPLE_MS : TEST_STEP_MS;
+    if (uwTick - tick < period) return;
+    tick = uwTick;
+
+    switch (step)
+    {
+    case 0:     /* 等首帧力矩，再读状态字和起始位置 */
+        if (s_t0 == 0u) s_t0 = uwTick;
+        if (torque_first_flag == 0u)
+        {
+            if ((uwTick - s_t0) > 15000u)
+            {
+                printf("\r\n[FAIL] 传感器 15 s 没收到有效帧，App_NJ70_Task() 在跑吗\r\n");
+                step = 99u;
+            }
+            return;
+        }
+
+        printf("\r\n---- 重力矩扫角采集（PP 模式）----\r\n");
+
+        if (!Dev_Joint_SdoReadBlock(OD_STATUSWORD, 0, &v, 100))
+        {
+            printf("[FAIL] 读状态字超时\r\n");
+            step = 99u;
+            return;
+        }
+        printf("状态字 0x%04lX\r\n", (unsigned long)v);
+
+        if (!Dev_Joint_SdoReadBlock(OD_POSITION_ACTUAL, 0, &v, 100))
+        {
+            printf("[FAIL] 读位置超时\r\n");
+            step = 99u;
+            return;
+        }
+        s_pos0 = (int32_t)v;
+        printf("起始位置 %ld counts  (%.2f deg)\r\n",
+               (long)s_pos0, (double)COUNT_TO_DEG(s_pos0));
+        printf("扫角范围 %+.1f ~ %+.1f deg，共 %u 点，每点停 %u ms\r\n",
+               (double)SCAN_START_DEG,
+               (double)(SCAN_START_DEG + (SCAN_POINTS - 1) * SCAN_STEP_DEG),
+               (unsigned)SCAN_POINTS, (unsigned)SCAN_SETTLE_MS);
+        printf("当前读数 %.4f N.m（原始值，零偏会进拟合的 c）\r\n",
+               (double)torque);
+        step = 1u;
+        break;
+
+    case 1:     /* 切 PP */
+        if (!Dev_Joint_SdoWriteBlock(OD_MODES_OF_OPERATION, 0, JOINT_MODE_PP, 1))
+        {
+            printf("[FAIL] 写 0x6060=1 失败  abort=0x%08lX\r\n",
+                   (unsigned long)Dev_Joint_SdoAbortCode());
+            step = 99u;
+            return;
+        }
+        step = 2u;
+        break;
+
+    case 2:     /* 确认模式 */
+        if (!Dev_Joint_SdoReadBlock(OD_MODE_DISPLAY, 0, &v, 100))
+        {
+            printf("[FAIL] 读 0x6061 超时\r\n");
+            step = 99u;
+            return;
+        }
+        printf("当前模式 %d\r\n", (int)(int8_t)v);
+        if ((int8_t)v != JOINT_MODE_PP)
+        {
+            printf("[FAIL] 模式没有切到 1(PP)\r\n");
+            step = 99u;
+            return;
+        }
+        step = 3u;
+        break;
+
+    case 3:     /* 轮廓速度 */
+        if (!Dev_Joint_SdoWriteBlock(OD_PROFILE_VELOCITY, 0, PROFILE_VEL, 4))
+        {
+            printf("[FAIL] 写 0x6081 失败\r\n");
+            step = 99u;
+            return;
+        }
+        printf("轮廓速度 %u counts/s (%.1f deg/s)\r\n",
+               (unsigned int)PROFILE_VEL, (double)COUNT_TO_DEG((int32_t)PROFILE_VEL));
+        step = 4u;
+        break;
+
+    case 4:     /* 加速度 */
+        if (!Dev_Joint_SdoWriteBlock(OD_PROFILE_ACCEL, 0, PROFILE_ACC, 4))
+        {
+            printf("[FAIL] 写 0x6083 失败\r\n");
+            step = 99u;
+            return;
+        }
+        step = 5u;
+        break;
+
+    case 5:     /* 减速度 */
+        if (!Dev_Joint_SdoWriteBlock(OD_PROFILE_DECEL, 0, PROFILE_ACC, 4))
+        {
+            printf("[FAIL] 写 0x6084 失败\r\n");
+            step = 99u;
+            return;
+        }
+        printf("加减速度 %u counts/s^2\r\n", (unsigned int)PROFILE_ACC);
+        step = 6u;
+        break;
+
+    case 6:     /* 目标 = 当前位置，避免使能瞬间跳 */
+        s_target = s_pos0;
+        if (!Dev_Joint_SdoWriteBlock(OD_TARGET_POSITION, 0, (uint32_t)s_target, 4))
+        {
+            printf("[FAIL] 写 0x607A 失败\r\n");
+            step = 99u;
+            return;
+        }
+        step = 7u;
+        break;
+
+    case 7:     /* Shutdown */
+        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_SHUTDOWN, 2);
+        step = 8u;
+        break;
+
+    case 8:     /* Switch On */
+        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_SWITCH_ON, 2);
+        step = 9u;
+        break;
+
+    case 9:     /* Enable Operation */
+        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_ENABLE_OPERATION, 2);
+        step = 10u;
+        break;
+
+    case 10:    /* 确认使能 */
+        if (!Dev_Joint_SdoReadBlock(OD_STATUSWORD, 0, &v, 100))
+        {
+            printf("[FAIL] 读状态字超时\r\n");
+            step = 99u;
+            return;
+        }
+        printf("状态字 0x%04lX  状态位 0x%02lX\r\n",
+               (unsigned long)v, (unsigned long)(v & SW_MASK_STATE));
+
+        if ((v & SW_MASK_STATE) != SW_STATE_ENABLED)
+        {
+            printf("[FAIL] 没进 Operation enabled(0x27)\r\n");
+            printf("       查 STO_IN(PIN1)/STO_COM(PIN2) 是否短接、48V 是否到位\r\n");
+            step = 99u;
+            return;
+        }
+
+        printf("[ OK ] 已使能，开始扫角\r\n");
+        printf("DATA,idx,target_deg,act_deg,counts,tau_Nm\r\n");
+        s_scan_i = 0u;
+        step = 11u;
+        break;
+
+    case 11:    /* 发第 s_scan_i 个点 */
+        if (s_scan_i >= SCAN_POINTS)
+        {
+            step = 14u;
+            break;
+        }
+        deg = SCAN_START_DEG + (float)s_scan_i * SCAN_STEP_DEG;
+        s_target = s_pos0 + DEG_TO_COUNT(deg);
+
+        Dev_Joint_SdoWriteBlock(OD_TARGET_POSITION, 0, (uint32_t)s_target, 4);
+        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_ENABLE_OPERATION, 2);                    /* bit4 = 0 */
+        Dev_Joint_SdoWriteBlock(OD_CONTROLWORD, 0, CW_ENABLE_OPERATION | CW_NEW_SETPOINT, 2);  /* bit4 上升沿 */
+
+        printf("--> 第 %u 点  目标 %+6.1f deg  (%+8ld)\r\n",
+               (unsigned)s_scan_i, (double)deg, (long)s_target);
+        s_move_t = uwTick;
+        step = 12u;
+        break;
+
+    case 12:    /* 等到位：先等 600ms 让 bit10 确实清 0 */
+        if ((uwTick - s_move_t) < 600u) break;
+
+        if (!Dev_Joint_SdoReadBlock(OD_STATUSWORD, 0, &v, 100))
+        {
+            printf("[WARN] 读状态字超时，跳过第 %u 点\r\n", (unsigned)s_scan_i);
+            s_scan_i++;
+            step = 11u;
+            break;
+        }
+        sw = (uint16_t)v;
+
+        if ((sw & 0x0400u) != 0u)           /* bit10 target reached */
+        {
+            s_settle_t = uwTick;
+            s_sum_tau  = 0.0f;
+            s_cnt_tau  = 0u;
+            step = 13u;
+            break;
+        }
+        if ((uwTick - s_move_t) > MOVE_TIMEOUT_MS)
+        {
+            printf("[WARN] 第 %u 点超时未到位，跳过\r\n", (unsigned)s_scan_i);
+            s_scan_i++;
+            step = 11u;
+        }
+        break;
+
+    case 13:    /* 稳定期采样，50ms 一次 */
+        s_sum_tau += torque;
+        s_cnt_tau++;
+
+        if ((uwTick - s_settle_t) < SCAN_SETTLE_MS) break;
+
+        if (!Dev_Joint_SdoReadBlock(OD_POSITION_ACTUAL, 0, &v, 100))
+        {
+            printf("[WARN] 第 %u 点读位置超时\r\n", (unsigned)s_scan_i);
+            s_scan_i++;
+            step = 11u;
+            break;
+        }
+        pos = (int32_t)v;
+        printf("DATA,%u,%.2f,%.2f,%ld,%.4f\r\n",
+               (unsigned)s_scan_i,
+               (double)(SCAN_START_DEG + (float)s_scan_i * SCAN_STEP_DEG),
+               (double)COUNT_TO_DEG(pos),
+               (long)pos,
+               s_cnt_tau ? (double)(s_sum_tau / (float)s_cnt_tau) : 0.0);
+
+        s_scan_i++;
+        step = 11u;
+        break;
+
+    case 14:    /* 汇总 */
+        printf("---- 采集结束，共 %u 点 ----\r\n", (unsigned)SCAN_POINTS);
+        printf("把 DATA 行贴出来，拟合 tau = a*cos(theta) + b*sin(theta) + c\r\n");
+        printf("其中 c = 传感器零偏 + 装夹预紧，与角度无关\r\n");
+        step = 99u;
+        break;
+
+    default:
+        step = 99u;
+        break;
+    }
+}
+/* =====================================================================
+ *  九、模块入口（main 主循环调用）
+ * ===================================================================== */
+
+/* =====================================================================
+ *  周期任务：目前只做 SDO 超时检测（Dev_Joint_Task）
+ * ===================================================================== */
+void App_Joint_Task(void)
+{
+    Dev_Joint_Task();
 }

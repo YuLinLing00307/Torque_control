@@ -1,13 +1,40 @@
 #include "dev_joint.h"
 #include <stdio.h>
 
-/* SDO 应答命令字（请求命令字见 joint_od.h） */
+/* =====================================================================
+ *  CANopen CiA402 从站 · 设备层
+ *
+ *  职责：SDO 单通道收发、TPDO1 解析、NMT 控制、位置缓存。
+ *  不含关节语义，APP 层只通过 Dev_Joint_* 访问。
+ *
+ *  SDO 是"一次只能有一条在飞"的通道，三条铁律：
+ *    1. 发请求前必须 state == IDLE。终态(OK/ABORT/TIMEOUT)没被上层取走时
+ *       不许覆盖，否则那个结果就丢了 —— 读位置正是这样丢的。
+ *    2. 应答必须校验 index/sub 与当前请求一致，对不上就丢（s_sdo_ghost++）。
+ *    3. 写确认(0x60) 和读应答(0x40~0x4F) 都会把 state 置 OK，
+ *       但写确认时 s_sdo_value = 0。上层必须用"我发起过读"的标志区分，
+ *       否则会把 0 当成位置反馈。
+ *
+ *  收帧走 CAN 中断：
+ *    HAL_CAN_RxFifo0MsgPendingCallback -> Dev_Joint_RxDispatch -> 各 COB 分支
+ * ===================================================================== */
+
+/* ---- SDO 应答命令字（请求命令字见 dev_joint_od.h）---- */
 #define SDO_SCS_WRITE_OK    0x60u
 #define SDO_SCS_ABORT       0x80u
+
+/* ---- TPDO1 映射条目（写 0x1A00 用）---- */
+#define TPDO_MAP_STATUSWORD   0x60410010u   /* 0x6041 状态字，16 位 */
+#define TPDO_MAP_POSITION     0x60640020u   /* 0x6064 实际位置，32 位 */
+
+/* ---- 0x6064 读取节流周期：app_nj70 100 Hz 调这里，节流到 20 Hz ---- */
+#define DEV_POS_PERIOD_MS   50u
 
 /* =====================================================================
  *  内部变量
  * ===================================================================== */
+
+/* ---- SDO 通道（一次只能有一条在飞）---- */
 static uint8_t       s_node        = 1;
 static JointSdoState s_sdo_state   = JOINT_SDO_IDLE;
 static uint32_t      s_sdo_value   = 0;
@@ -18,21 +45,35 @@ static uint16_t      s_sdo_index   = 0xFFFFu;  /* 当前在等的请求身份 */
 static uint8_t       s_sdo_sub     = 0xFFu;
 static uint32_t      s_sdo_ghost   = 0;        /* 被丢弃的迟到/错序应答数 */
 
-static uint16_t s_status  = 0;
-static uint32_t s_di      = 0;
-static uint8_t  s_mode    = 0;
-static uint16_t s_emcy    = 0;
-/* EMCY 帧计数。驱动器一跳故障立刻发一帧 0x080+node，这是全总线唯一
- * "带时刻的故障通知"。APP 的 1 kHz 中断拿它当时间戳定格黑匣子，
- * 于是能拿到"故障发生前 512 ms"的现场，而不是 1 s 之后的一次抽查。 */
-static volatile uint32_t s_emcy_cnt = 0;
+/* ---- 对象字典缓存（来自 TPDO/EMCY 中断）---- */
+static uint16_t s_status  = 0;                 /* 0x6041 */
+static uint32_t s_di      = 0;                 /* 0x60FD */
+static uint8_t  s_mode    = 0;                 /* 0x6061 */
+static uint16_t s_emcy    = 0;                 /* 最近一次 EMCY 错误码 */
+static volatile uint32_t s_emcy_cnt = 0;       /* EMCY 帧数，给故障打时间戳 */
 
+/* ---- TPDO1 位置 ----
+ * 默认映射 {0x6041, 0x60FD, 0x6061} 里没有位置，运行期只能 SDO 轮询 0x6064。
+ * 改成 {0x6041, 0x6064} 后位置每帧跟状态字一起上来，运行期一条 SDO 都不发。 */
+static uint8_t           s_tpdo_pos_layout = 0u;
+static volatile int32_t  s_tpdo_pos        = 0;
+static volatile uint32_t s_tpdo_pos_cnt    = 0u;
+
+/* ---- 0x6064 读缓存（给重力补偿和调试用，不是控制环反馈）---- */
+static int32_t  s_pos_cache  = 0;
+static uint32_t s_pos_t0     = 0;
+static uint8_t  s_pos_freeze = 0u;             /* 1 = 只返回缓存，不碰 SDO */
+
+/* ---- 统计 ---- */
 static uint32_t s_rx_cnt      = 0;
 static uint32_t s_boot_cnt    = 0;
 static uint8_t  s_nmt_state   = 0xFFu;   /* 心跳里的 NMT 状态：5=Operational 127=Pre-op */
 static uint32_t s_sdo_to_cnt  = 0;
 static uint32_t s_tx_fail_cnt = 0;
-static uint32_t s_tpdo1_cnt   = 0;   /* TPDO1 帧数：为 0 说明状态字通道没走通 */
+static uint32_t s_tpdo1_cnt   = 0;       /* 为 0 说明状态字通道没走通 */
+/* =====================================================================
+ *  一、底层发送
+ * ===================================================================== */
 
 /* =====================================================================
  *  SDO 发送
@@ -63,11 +104,31 @@ static uint8_t sdo_send(uint8_t cmd, uint16_t index, uint8_t sub, uint32_t value
 }
 
 /* =====================================================================
+ *  NMT：链路层探针
+ * ===================================================================== */
+static uint8_t nmt_send(uint8_t cs, uint8_t node)
+{
+    uint8_t d[2];
+
+    d[0] = cs;          /* 命令字 */
+    d[1] = node;        /* 目标节点，0 = 全部 */
+
+    if (Bsp_Can_SendData(CAN_ID_STD, COB_NMT, d, 2) != HAL_OK)
+    {
+        s_tx_fail_cnt++;
+        return 0;
+    }
+    return 1;
+}
+/* =====================================================================
+ *  二、中断接收（只取帧 + 解析，不打印、不阻塞）
+ * ===================================================================== */
+
+/* =====================================================================
  *  SDO 应答处理（中断上下文）
  * ===================================================================== */
 static void sdo_on_response(const uint8_t *d, uint8_t dlc)
 {
-    // d[0] 是 SDO 应答的第一个字节，也就是“命令字”，决定了这帧数据是什么结果
     uint8_t  cmd = d[0];
     uint16_t idx = (uint16_t)((uint16_t)d[1] | ((uint16_t)d[2] << 8));
     uint8_t  sub = d[3];
@@ -85,8 +146,7 @@ static void sdo_on_response(const uint8_t *d, uint8_t dlc)
         return;
     }
 
-    /* ---------- 情况一：写指令成功 ---------- */
-    // 刚才我们向驱动器发了个写参数指令，它回个 0x60 表示“写好了”
+    /* ---------- 情况一：写指令成功（0x60）---------- */
     if (cmd == SDO_SCS_WRITE_OK)
     {
         /* 只有"这条写确实是我们在等的那条"才清值。
@@ -104,48 +164,32 @@ static void sdo_on_response(const uint8_t *d, uint8_t dlc)
     /* ---------- 情况二：读指令的应答 ---------- */
     if ((cmd & 0xE0u) == SDO_READ)
     {
-        // 【神级操作】这行代码算出了这次读了几个字节。
-        // 比如读了4字节，这2位就是0 (4-0=4)；读了2字节，这2位是2 (4-2=2)
+        /* 命令字 bit2~3 = 4-n，反算出这次回了几个有效字节 */
         uint8_t  n = (uint8_t)(4u - ((cmd >> 2) & 0x03u));
         uint32_t v = 0;
         uint8_t  i;
 
-        // 把 d[4] 到 d[4+n-1] 的有效数据，按照小端模式，拼成一个 32 位整数
+        /* 小端拼接有效字节 */
         for (i = 0; i < n && i < 4u; i++)
             v |= (uint32_t)d[4 + i] << (8u * i);
 
-        s_sdo_value = v; // 把拼好的数据存到全局变量里
-        if (s_sdo_state == JOINT_SDO_WAIT) s_sdo_state = JOINT_SDO_OK; // 标记读取成功
+        s_sdo_value = v;
+        if (s_sdo_state == JOINT_SDO_WAIT) s_sdo_state = JOINT_SDO_OK;
         return;
     }
 
-    /* ---------- 情况三：指令被拒绝（Abort） ---------- */
-    // 0x80 表示 SDO 异常。比如你发了一个不存在的地址，或者格式不对
+    /* ---------- 情况三：指令被拒绝（0x80 Abort）---------- */
     if (cmd == SDO_SCS_ABORT)
     {
-        // 把 d[4]~d[7] 拼起来，这是驱动器返回的“错误代码”，方便查手册
         s_sdo_abort = (uint32_t)d[4]
                     | ((uint32_t)d[5] << 8)
                     | ((uint32_t)d[6] << 16)
                     | ((uint32_t)d[7] << 24);
         s_sdo_value = 0;
-        if (s_sdo_state == JOINT_SDO_WAIT) s_sdo_state = JOINT_SDO_ABORT; // 标记异常
+        if (s_sdo_state == JOINT_SDO_WAIT) s_sdo_state = JOINT_SDO_ABORT;
         return;
     }
 }
-
-/* =====================================================================
- *  TPDO1 解析（中断上下文）
- *  默认映射：6041(16) + 60FD(32) + 6061(8)
- * ===================================================================== */
-/* ---- TPDO1 的"位置布局" ----
- * 默认布局 {0x6041, 0x60FD, 0x6061} 里没有位置，位置只能 SDO 轮询 0x6064。
- * 把 0x1A00 改成 {0x6041, 0x6064} 以后，位置每帧跟状态字一起上来，
- * 运行期一条 SDO 都不用发 —— 这是排除"20 ms 一条 SDO 打断驱动器插补"
- * 这个变量唯一干净的办法。 */
-static uint8_t  s_tpdo_pos_layout = 0u;
-static volatile int32_t  s_tpdo_pos     = 0;
-static volatile uint32_t s_tpdo_pos_cnt = 0u;
 
 static void tpdo1_on_rx(const uint8_t *d, uint8_t dlc)
 {
@@ -178,20 +222,24 @@ static void tpdo1_on_rx(const uint8_t *d, uint8_t dlc)
         s_mode = d[6];
 }
 
+
 /* =====================================================================
- *  对外接口
+ *  CAN 接收回调（HAL 弱函数的强定义，全局唯一）
+ *  中断上下文：只取帧 + 分派，不打印、不阻塞
  * ===================================================================== */
-void Dev_Joint_Init(uint8_t node_id)
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
-    s_node        = node_id;
-    s_sdo_state   = JOINT_SDO_IDLE;
-    s_sdo_timeout = 50;
-    s_status      = 0;
-    s_di          = 0;
-    s_mode        = 0;
-    s_emcy        = 0;
-    s_tpdo1_cnt   = 0;
+    CAN_RxHeaderTypeDef rxHeader = {0};
+    uint8_t rxData[8] = {0};
+
+    if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
+        return;
+    if (rxHeader.IDE == CAN_ID_STD)
+        Dev_Joint_RxDispatch((uint16_t)rxHeader.StdId, rxData, (uint8_t)rxHeader.DLC);
 }
+/* =====================================================================
+ *  三、收帧分派与初始化
+ * ===================================================================== */
 
 void Dev_Joint_RxDispatch(uint16_t std_id, const uint8_t *data, uint8_t dlc)
 {
@@ -230,19 +278,23 @@ void Dev_Joint_RxDispatch(uint16_t std_id, const uint8_t *data, uint8_t dlc)
     /* 其他帧（NMT / 心跳）暂时忽略 */
 }
 
-void Dev_Joint_Task(void)
+/* =====================================================================
+ *  对外接口
+ * ===================================================================== */
+void Dev_Joint_Init(uint8_t node_id)
 {
-    /* 收帧走 CAN 中断 -> HAL_CAN_RxFifo0MsgPendingCallback -> Dev_Joint_RxDispatch，
-       这里只做 SDO 超时检测，不碰 FIFO。 */
-    if (s_sdo_state == JOINT_SDO_WAIT)
-    {
-        if ((HAL_GetTick() - s_sdo_t0) > s_sdo_timeout)
-        {
-            s_sdo_state = JOINT_SDO_TIMEOUT;
-            s_sdo_to_cnt++;
-        }
-    }
+    s_node        = node_id;
+    s_sdo_state   = JOINT_SDO_IDLE;
+    s_sdo_timeout = 50;
+    s_status      = 0;
+    s_di          = 0;
+    s_mode        = 0;
+    s_emcy        = 0;
+    s_tpdo1_cnt   = 0;
 }
+/* =====================================================================
+ *  四、SDO 单步：发起 / 轮询 / 复位
+ * ===================================================================== */
 
 uint8_t Dev_Joint_SdoRead(uint16_t index, uint8_t sub)
 {
@@ -341,11 +393,9 @@ void Dev_Joint_SdoReset(void)
     s_sdo_sub   = 0xFFu;
     __enable_irq();
 }
-
-JointSdoState Dev_Joint_SdoState(void)      { return s_sdo_state; }
-uint32_t      Dev_Joint_SdoAbortCode(void)  { return s_sdo_abort; }
-uint32_t      Dev_Joint_SdoGhostCnt(void)   { return s_sdo_ghost; }
-void          Dev_Joint_SetSdoTimeout(uint32_t ms) { s_sdo_timeout = ms; }
+/* =====================================================================
+ *  五、SDO 阻塞版（主循环专用，内部自己轮询）
+ * ===================================================================== */
 
 uint8_t Dev_Joint_SdoReadBlock(uint16_t index, uint8_t sub, uint32_t *value, uint32_t timeout_ms)
 {
@@ -396,62 +446,26 @@ uint8_t Dev_Joint_SdoWriteBlock(uint16_t index, uint8_t sub, uint32_t value, uin
 
     return 0;
 }
-
-uint16_t Dev_Joint_Status(void)         { return s_status; }
-uint32_t Dev_Joint_DigitalInputs(void)  { return s_di; }
-uint8_t  Dev_Joint_ModeDisplay(void)    { return s_mode; }
-uint16_t Dev_Joint_Emcy(void)           { return s_emcy; }
-uint32_t Dev_Joint_EmcyCount(void)      { return s_emcy_cnt; }
-
-uint8_t Dev_Joint_Sync(void)
-{
-    static uint8_t dummy[8] = {0};
-
-    if (Bsp_Can_SendData(CAN_ID_STD, COB_SYNC, dummy, 0) != HAL_OK)
-    {
-        s_tx_fail_cnt++;
-        return 0;
-    }
-    return 1;
-}
-
 /* =====================================================================
- *  NMT：链路层探针
+ *  六、周期任务：SDO 超时检测
  * ===================================================================== */
-static uint8_t nmt_send(uint8_t cs, uint8_t node)
+
+void Dev_Joint_Task(void)
 {
-    uint8_t d[2];
-
-    d[0] = cs;          /* 命令字 */
-    d[1] = node;        /* 目标节点，0 = 全部 */
-
-    if (Bsp_Can_SendData(CAN_ID_STD, COB_NMT, d, 2) != HAL_OK)
+    /* 收帧走 CAN 中断 -> HAL_CAN_RxFifo0MsgPendingCallback -> Dev_Joint_RxDispatch，
+       这里只做 SDO 超时检测，不碰 FIFO。 */
+    if (s_sdo_state == JOINT_SDO_WAIT)
     {
-        s_tx_fail_cnt++;
-        return 0;
+        if ((HAL_GetTick() - s_sdo_t0) > s_sdo_timeout)
+        {
+            s_sdo_state = JOINT_SDO_TIMEOUT;
+            s_sdo_to_cnt++;
+        }
     }
-    return 1;
 }
-
-uint8_t Dev_Joint_NmtResetNode(uint8_t node) { return nmt_send(NMT_RESET_NODE, node); }
-uint8_t Dev_Joint_NmtStart(uint8_t node)     { return nmt_send(NMT_START_NODE, node); }
-uint8_t Dev_Joint_NmtPreOp(uint8_t node)     { return nmt_send(NMT_PREOP_NODE, node); }
-uint32_t Dev_Joint_BootCount(void)           { return s_boot_cnt; }
-uint8_t  Dev_Joint_NmtState(void)            { return s_nmt_state; }
-
-uint32_t Dev_Joint_RxCount(void)          { return s_rx_cnt; }
-uint32_t Dev_Joint_SdoTimeoutCount(void)  { return s_sdo_to_cnt; }
-uint32_t Dev_Joint_TxFailCount(void)      { return s_tx_fail_cnt; }
-uint32_t Dev_Joint_Tpdo1Count(void)       { return s_tpdo1_cnt; }
-
-
 /* =====================================================================
- *  TPDO1 改映射成 {0x6041, 0x6064}：状态字 + 实际位置
- *  只在通信参数（0x1800/0x1A00）上动，不碰任何电机参数。
- *  失败时不还原也没关系 —— 原映射只是少了位置，SDO 照样能读。
+ *  七、TPDO1 改映射：状态字 + 实际位置
  * ===================================================================== */
-#define TPDO_MAP_STATUSWORD   0x60410010u
-#define TPDO_MAP_POSITION     0x60640020u
 
 uint8_t Dev_Joint_Tpdo1SetupPos(void)
 {
@@ -547,14 +561,21 @@ uint32_t Dev_Joint_TpdoPosCount(void)
 {
     return s_tpdo_pos_cnt;
 }
-
 /* =====================================================================
- *  位置读取（语义封装）
+ *  八、SYNC 与位置缓存
  * ===================================================================== */
-#define DEV_POS_PERIOD_MS   50u     /* 0x6064 读取节流周期 */
-static int32_t  s_pos_cache  = 0;
-static uint32_t s_pos_t0     = 0;
-static uint8_t  s_pos_freeze = 0u;
+
+uint8_t Dev_Joint_Sync(void)
+{
+    static uint8_t dummy[8] = {0};
+
+    if (Bsp_Can_SendData(CAN_ID_STD, COB_SYNC, dummy, 0) != HAL_OK)
+    {
+        s_tx_fail_cnt++;
+        return 0;
+    }
+    return 1;
+}
 
 void Dev_Joint_SetPosFreeze(uint8_t on)
 {
@@ -591,19 +612,32 @@ uint8_t Dev_Joint_ReadPos(int32_t *pos)
     if (pos != 0) *pos = s_pos_cache;
     return 1;
 }
-
-
 /* =====================================================================
- *  CAN 接收回调（HAL 弱函数的强定义，全局唯一）
- *  中断上下文：只取帧 + 分派，不打印、不阻塞
+ *  查询接口（单行转发，按状态字 / SDO / NMT / 统计归类）
  * ===================================================================== */
-void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
-{
-    CAN_RxHeaderTypeDef rxHeader = {0};
-    uint8_t rxData[8] = {0};
 
-    if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData) != HAL_OK)
-        return;
-    if (rxHeader.IDE == CAN_ID_STD)
-        Dev_Joint_RxDispatch((uint16_t)rxHeader.StdId, rxData, (uint8_t)rxHeader.DLC);
-}
+/* ---- SDO 状态 ---- */
+JointSdoState Dev_Joint_SdoState(void)      { return s_sdo_state; }
+uint32_t      Dev_Joint_SdoAbortCode(void)  { return s_sdo_abort; }
+uint32_t      Dev_Joint_SdoGhostCnt(void)   { return s_sdo_ghost; }
+void          Dev_Joint_SetSdoTimeout(uint32_t ms) { s_sdo_timeout = ms; }
+
+/* ---- 驱动器状态 ---- */
+uint16_t Dev_Joint_Status(void)         { return s_status; }
+uint32_t Dev_Joint_DigitalInputs(void)  { return s_di; }
+uint8_t  Dev_Joint_ModeDisplay(void)    { return s_mode; }
+uint16_t Dev_Joint_Emcy(void)           { return s_emcy; }
+uint32_t Dev_Joint_EmcyCount(void)      { return s_emcy_cnt; }
+
+/* ---- NMT ---- */
+uint8_t  Dev_Joint_NmtResetNode(uint8_t node) { return nmt_send(NMT_RESET_NODE, node); }
+uint8_t  Dev_Joint_NmtStart(uint8_t node)     { return nmt_send(NMT_START_NODE, node); }
+uint8_t  Dev_Joint_NmtPreOp(uint8_t node)     { return nmt_send(NMT_PREOP_NODE, node); }
+uint32_t Dev_Joint_BootCount(void)            { return s_boot_cnt; }
+uint8_t  Dev_Joint_NmtState(void)             { return s_nmt_state; }
+
+/* ---- 统计计数 ---- */
+uint32_t Dev_Joint_RxCount(void)          { return s_rx_cnt; }
+uint32_t Dev_Joint_SdoTimeoutCount(void)  { return s_sdo_to_cnt; }
+uint32_t Dev_Joint_TxFailCount(void)      { return s_tx_fail_cnt; }
+uint32_t Dev_Joint_Tpdo1Count(void)       { return s_tpdo1_cnt; }

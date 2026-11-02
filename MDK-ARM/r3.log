@@ -1,0 +1,59 @@
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\Keil_v5\ARM\ARMCC\Bin'
+Build target 'Torque_control'
+compiling dev_joint.c...
+..\Drivers\Devices\dev_joint.c(95): error:  #148: variable "s_node"  has already been initialized
+  static uint8_t       s_node        = 1;
+..\Drivers\Devices\dev_joint.c(97): error:  #148: variable "s_sdo_state"  has already been initialized
+  static JointSdoState s_sdo_state   = JOINT_SDO_IDLE;
+..\Drivers\Devices\dev_joint.c(99): error:  #148: variable "s_sdo_value"  has already been initialized
+  static uint32_t      s_sdo_value   = 0;
+..\Drivers\Devices\dev_joint.c(101): error:  #148: variable "s_sdo_abort"  has already been initialized
+  static uint32_t      s_sdo_abort   = 0;
+..\Drivers\Devices\dev_joint.c(103): error:  #148: variable "s_sdo_t0"  has already been initialized
+  static uint32_t      s_sdo_t0      = 0;
+..\Drivers\Devices\dev_joint.c(105): error:  #148: variable "s_sdo_timeout"  has already been initialized
+  static uint32_t      s_sdo_timeout = 50;
+..\Drivers\Devices\dev_joint.c(107): error:  #148: variable "s_sdo_index"  has already been initialized
+  static uint16_t      s_sdo_index   = 0xFFFFu;  /* 当前在等的请求身份 */
+..\Drivers\Devices\dev_joint.c(109): error:  #148: variable "s_sdo_sub"  has already been initialized
+  static uint8_t       s_sdo_sub     = 0xFFu;
+..\Drivers\Devices\dev_joint.c(111): error:  #148: variable "s_sdo_ghost"  has already been initialized
+  static uint32_t      s_sdo_ghost   = 0;        /* 被丢弃的迟到/错序应答数 */
+..\Drivers\Devices\dev_joint.c(115): error:  #148: variable "s_status"  has already been initialized
+  static uint16_t s_status  = 0;
+..\Drivers\Devices\dev_joint.c(117): error:  #148: variable "s_di"  has already been initialized
+  static uint32_t s_di      = 0;
+..\Drivers\Devices\dev_joint.c(119): error:  #148: variable "s_mode"  has already been initialized
+  static uint8_t  s_mode    = 0;
+..\Drivers\Devices\dev_joint.c(121): error:  #148: variable "s_emcy"  has already been initialized
+  static uint16_t s_emcy    = 0;
+..\Drivers\Devices\dev_joint.c(129): error:  #148: variable "s_emcy_cnt"  has already been initialized
+  static volatile uint32_t s_emcy_cnt = 0;
+..\Drivers\Devices\dev_joint.c(133): error:  #148: variable "s_rx_cnt"  has already been initialized
+  static uint32_t s_rx_cnt      = 0;
+..\Drivers\Devices\dev_joint.c(135): error:  #148: variable "s_boot_cnt"  has already been initialized
+  static uint32_t s_boot_cnt    = 0;
+..\Drivers\Devices\dev_joint.c(137): error:  #148: variable "s_nmt_state"  has already been initialized
+  static uint8_t  s_nmt_state   = 0xFFu;   /* 心跳里的 NMT 状态：5=Operational 127=Pre-op */
+..\Drivers\Devices\dev_joint.c(139): error:  #148: variable "s_sdo_to_cnt"  has already been initialized
+  static uint32_t s_sdo_to_cnt  = 0;
+..\Drivers\Devices\dev_joint.c(141): error:  #148: variable "s_tx_fail_cnt"  has already been initialized
+  static uint32_t s_tx_fail_cnt = 0;
+..\Drivers\Devices\dev_joint.c(143): error:  #148: variable "s_tpdo1_cnt"  has already been initialized
+  static uint32_t s_tpdo1_cnt   = 0;   /* TPDO1 帧数：为 0 说明状态字通道没走通 */
+..\Drivers\Devices\dev_joint.c(395): error:  #148: variable "s_tpdo_pos_layout"  has already been initialized
+  static uint8_t  s_tpdo_pos_layout = 0u;
+..\Drivers\Devices\dev_joint.c(397): error:  #148: variable "s_tpdo_pos"  has already been initialized
+  static volatile int32_t  s_tpdo_pos     = 0;
+..\Drivers\Devices\dev_joint.c(399): error:  #148: variable "s_tpdo_pos_cnt"  has already been initialized
+  static volatile uint32_t s_tpdo_pos_cnt = 0u;
+..\Drivers\Devices\dev_joint.c(1189): error:  #148: variable "s_pos_cache"  has already been initialized
+  static int32_t  s_pos_cache  = 0;
+..\Drivers\Devices\dev_joint.c(1191): error:  #148: variable "s_pos_t0"  has already been initialized
+  static uint32_t s_pos_t0     = 0;
+..\Drivers\Devices\dev_joint.c(1193): error:  #148: variable "s_pos_freeze"  has already been initialized
+  static uint8_t  s_pos_freeze = 0u;
+..\Drivers\Devices\dev_joint.c: 0 warnings, 26 errors
+"Torque_control\Torque_control.axf" - 26 Error(s), 0 Warning(s).
+Target not created.
+Build Time Elapsed:  00:00:01
