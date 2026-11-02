@@ -44,6 +44,8 @@ static void Key_read(void)
 
 void App_Key_Task(void)
 {
+	uint32_t busy;
+
 	if (uwTick - key_tick < KEY_PERIOD_MS)
 	{
 		return;
@@ -51,11 +53,13 @@ void App_Key_Task(void)
 	key_tick = uwTick;
 	Key_read();
 
-	/* KEY0：按一下启动导纳环，再按一下停机。
-	 * 启动是 20 ms 一步的非阻塞状态机，整个过程 LED1 常亮 = 运行中。 */
+	busy = App_Joint_Adm_IsBusy();
+
+	/* KEY0：启动 / 停机。启动是 20 ms 一步的非阻塞状态机，
+	 * 整个过程 LED1 常亮 = 运行中。 */
 	if (key_down == 1)
 	{
-		if (App_Joint_Adm_IsBusy() != 0u)
+		if (busy != 0u)
 		{
 			App_Joint_Adm_StopKey();
 		}
@@ -73,8 +77,8 @@ void App_Key_Task(void)
 		App_Joint_Adm_CycleGain();
 	}
 
-	/* LED1 常亮 = 导纳环运行中 */
-	if (App_Joint_Adm_IsBusy() != 0u)
+	/* LED1 常亮 = 有东西在跑 */
+	if (busy != 0u)
 	{
 		HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
 	}

@@ -562,21 +562,8 @@ uint32_t Dev_Joint_TpdoPosCount(void)
     return s_tpdo_pos_cnt;
 }
 /* =====================================================================
- *  八、SYNC 与位置缓存
+ *  八、位置缓存（APP 层不直接碰 0x6064，统一走这里）
  * ===================================================================== */
-
-uint8_t Dev_Joint_Sync(void)
-{
-    static uint8_t dummy[8] = {0};
-
-    if (Bsp_Can_SendData(CAN_ID_STD, COB_SYNC, dummy, 0) != HAL_OK)
-    {
-        s_tx_fail_cnt++;
-        return 0;
-    }
-    return 1;
-}
-
 void Dev_Joint_SetPosFreeze(uint8_t on)
 {
     s_pos_freeze = on;

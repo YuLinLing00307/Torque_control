@@ -83,8 +83,6 @@
 /* 插补：【0x60C2 保持 1 ms，别再改】曾改成 10 想"与写点周期对齐"，
  * 实测直接崩：11.4° 稳态跟随误差、驱动器出力约 0、手感消失。详见《导纳控制调参记录.md》 */
 #define OD_INTERP_TIME          0x60C2u     /* u8   rw   子1 周期值，子2 指数（1 / -3 = 1 ms） */
-#define OD_INTERP_PERIOD        0x3675u     /* 子1 实测周期 子2 估计值 cycle 子3 相位 us */
-#define OD_INTERP_MODE          0x60C0u     /* i16  rw   插值方法 */
 
 /* ================ 五、PDO 配置 ================ */
 #define OD_TPDO1_COB            0x1800u     /* 子01 COB-ID（bit30=1 = 未启用），02 传输类型，
@@ -100,7 +98,6 @@
 #define OD_SUB_PRODUCT          2u
 #define OD_SUB_REVISION         3u
 #define OD_SUB_SERIAL           4u
-#define OD_COMM_CYCLE           0x1006u     /* u32  rw   通信周期 us（0 = 只听主站 SYNC） */
 #define OD_HEARTBEAT_TIME       0x1017u     /* u16  rw   心跳周期 ms（0 = 关闭） */
 /* 0x1016 六个子索引 EDS 实读全 0。一旦写入，主站必须周期发 0x700+主站节点号 的心跳，
  * 否则超时后驱动器自动失能。默认全 0 = 不监控，别乱开。 */

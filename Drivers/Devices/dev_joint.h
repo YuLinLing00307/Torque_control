@@ -97,9 +97,6 @@ uint32_t Dev_Joint_BootCount(void);
  * PDO 只在 Operational 下生效，这是判断 RPDO 通没通的唯一直接证据。 */
 uint8_t  Dev_Joint_NmtState(void);
 
-/* SYNC：CSP / CSV / CST 靠它推动。当前走 PP，用不到，留着备查。 */
-uint8_t Dev_Joint_Sync(void);
-
 /* ================ 八、位置读取（语义封装） ================
  * APP 层不要直接碰 0x6064 / SDO。
  * 位置反馈已经全走 TPDO1（Dev_Joint_TpdoGetPos），这个函数只在调试 / 自检里用。

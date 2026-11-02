@@ -12,11 +12,11 @@ extern TIM_HandleTypeDef htim3;
  *  100 Hz 递推在 TIM3 ISR 里做，只算 pos_cmd，一帧 CAN 都不发：
  *      M*acc + B*vel + K*(pos - pos_ref) = tau_ext
  *
- *  主循环 40 ms 把 (pos_cmd + 超前量) 写进 0x607A，三帧 SDO 换一个点：
+ *  主循环 40 ms 把 pos_cmd 写进 0x607A，三帧 SDO 换一个点：
  *      0x0F (bit4=0) -> 写 0x607A -> 0x3F (bit4 上升沿 = 采信新点)
  *
  *  分工：
- *      ISR    读力矩 -> 递推 -> 更新 s_adm_pos_tgt（含超前与限位钳位）
+ *      ISR    读力矩 -> 递推 -> 更新 s_adm_pos_tgt（软限位钳位）
  *      主循环 取 TPDO -> 换点 -> 看门狗 -> 打印
  *  两边只通过 volatile 变量通信。ISR 里不碰 CAN / SDO / printf / HAL_Delay。
  * ===================================================================== */
@@ -61,8 +61,7 @@ static volatile uint32_t s_adm_beat      = 0u;
 static volatile float    s_adm_delta_pos = 0.0f;
 static volatile float    s_adm_delta_vel = 0.0f;
 static volatile float    s_adm_pos_cmd   = 0.0f;  /* 导纳模型算出的位置 */
-static volatile float    s_adm_pos_tgt   = 0.0f;  /* 实际写 0x607A = cmd + 超前量 */
-static volatile float    s_adm_lead_v    = 0.0f;  /* 超前量用的速度（低通后）*/
+static volatile float    s_adm_pos_tgt   = 0.0f;  /* 实际写进 0x607A 的目标 */
 static volatile float    s_adm_tau_grav  = 0.0f;  /* 当前姿态重力矩 */
 
 /* ---- 增益档位 ----
@@ -111,7 +110,8 @@ static uint32_t s_adm_hold_t = 0u;
 /* ---- 峰值统计（停机汇总）---- */
 static volatile int32_t s_adm_tgt_prev = 0;
 static volatile int32_t s_adm_jump_pk  = 0;
-static volatile int32_t s_adm_err_pk   = 0;
+static volatile int32_t s_adm_err_pk   = 0;   /* max|tgt-fdb|，顶力的正比量 */
+static volatile int32_t s_adm_vel_at_pk = 0;  /* err_pk 出现时的递推速度 */
 
 /* ---- 打印缓存 ---- */
 static int32_t s_adm_tq_pm    = 0;                /* 0x6077 permille 额定 */
@@ -127,6 +127,7 @@ static uint32_t s_settle_t = 0;
 static float    s_sum_tau  = 0.0f;
 static uint16_t s_cnt_tau  = 0;
 static uint32_t s_t0       = 0;
+
 
 static void Adm_ApplyGain(uint8_t idx);
 /* =====================================================================
@@ -232,27 +233,13 @@ static void Adm_PollTpdo(void)
         s_adm_sw = Dev_Joint_Status();
     }
 }
-/* ---- PP 换点：两种机制由 ADM_USE_IP 选择 ---- */
-
 /* ---------------------------------------------------------------------
- *  换点。两种机制由 ADM_USE_IP 选择，逻辑完全不同：
- *
- *  IP（0x6060=7）：只写 0x607A，控制字恒 0x000F。
- *     驱动器按 0x60C2(1 ms) 自己插补过去，**不做"到点停"重规划**，
- *     所以没有 PP 那个 25 Hz 的速度三角，运动是连续的。
- *     只要一条 SDO，换点从约 3 ms 降到约 1 ms。
- *
- *  PP（0x6060=1）：0x0F(bit4=0) -> 写 0x607A -> 0x3F(bit4 上升沿 = 采信新点)。
- *     位置流测试里连跑 400 点零失败，也是现在这版的保底路径。
+ *  PP 换点：0x0F(bit4=0) -> 写 0x607A -> 0x3F(bit4 上升沿 = 采信新点)。
+ *  两条写之间各留 1 ms 给驱动器清 bit12，实测连跑上千点零失败。
+ *  注：IP / CSP / CSV 三种模式都实测过，这台驱动器只有 PP 能用，别再试。
  * ------------------------------------------------------------------- */
 static uint8_t Adm_PpSend(int32_t tgt)
 {
-#if (ADM_USE_IP != 0u)
-    if (!Adm_Wr(OD_TARGET_POSITION, 0u, (uint32_t)tgt, 4u)) return 0u;
-
-    s_adm_pp_sent = tgt;
-    return 1u;
-#else
     if (!Adm_Wr(OD_CONTROLWORD, 0u, CW_ENABLE_OPERATION, 2u)) return 0u;
     HAL_Delay(1u);                       /* 给驱动器清 bit12 的时间，实测 400 点无失败 */
     if (!Adm_Wr(OD_TARGET_POSITION, 0u, (uint32_t)tgt, 4u))   return 0u;
@@ -261,7 +248,6 @@ static uint8_t Adm_PpSend(int32_t tgt)
 
     s_adm_pp_sent = tgt;
     return 1u;
-#endif
 }
 /* =====================================================================
  *  三、控制核心：100 Hz 递推 + TIM3 中断
@@ -297,7 +283,6 @@ static void Adm_Solve100(void)
     float   delta_vel;
     float   delta_pos;
     float   pos_cmd;
-    float   pos_tgt;
     float   pos_lo;
     float   pos_hi;
     int32_t target;
@@ -330,6 +315,7 @@ static void Adm_Solve100(void)
 
     /* 先限速度再积分，顺序不能反 */
     delta_vel += acc_cmd * ADM_DT;
+
     if (delta_vel >  ADM_VEL_MAX) delta_vel =  ADM_VEL_MAX;
     if (delta_vel < -ADM_VEL_MAX) delta_vel = -ADM_VEL_MAX;
 
@@ -357,26 +343,24 @@ static void Adm_Solve100(void)
     s_adm_delta_vel = delta_vel;
     s_adm_pos_cmd   = pos_cmd;
 
-    /* 超前补偿：把目标按当前速度前移 ADM_LEAD_MS，抵消驱动器追阶梯的滞后。
-     * 速度先过一阶低通 —— 换向时 delta_vel 从 -16000 直接跳到 +16000，
-     * 不滤的话目标位置会瞬移 500+ counts，那一下就是一次可听见的"哒"。
-     * 软限位对超前后的目标再钳一次，免得贴限位时多冲。 */
-    s_adm_lead_v += (delta_vel - s_adm_lead_v) * ADM_LEAD_LPF;
-    pos_tgt = pos_cmd + s_adm_lead_v * ADM_LEAD_S;
-    if (pos_tgt > pos_hi) pos_tgt = pos_hi;
-    if (pos_tgt < pos_lo) pos_tgt = pos_lo;
-    s_adm_pos_tgt = pos_tgt;
+    /* 目标就是 pos_cmd。超前补偿（tgt = cmd + v*LEAD）实测在 PP 下无效：
+     * 驱动器拿到新点从当前位置重新规划，超前的部分兑现不了，只会 1:1 加进
+     * err 变成顶力。已整块移除，详见 导纳控制调参记录.md 第 11 节。 */
+    s_adm_pos_tgt = pos_cmd;
+    target = (int32_t)pos_cmd;
 
-    target = (int32_t)pos_tgt;
-
-    /* 两个峰值，纯测量。单拍跳变上限见 App_Joint_Adm_Stop() 的打印 */
+    /* 峰值，纯测量。单拍跳变上限见 App_Joint_Adm_Stop() 的打印 */
     {
         int32_t j = target - s_adm_tgt_prev;
         int32_t e = target - s_adm_pos_fdb;
         if (j < 0) j = -j;
         if (e < 0) e = -e;
         if (j > s_adm_jump_pk) s_adm_jump_pk = j;
-        if (e > s_adm_err_pk)  s_adm_err_pk  = e;
+        if (e > s_adm_err_pk)
+        {
+            s_adm_err_pk    = e;
+            s_adm_vel_at_pk = (int32_t)delta_vel;
+        }
         s_adm_tgt_prev = target;
     }
 }
@@ -418,13 +402,8 @@ static void App_Joint_Adm_Step(void)
     {
     case 1u:
         Dev_Joint_SetPosFreeze(1u);      /* 独占 SDO：挡住 app_nj70 的周期性位置读 */
-#if (ADM_USE_IP != 0u)
-        printf("\r\n[ADM] ===== 导纳控制启动（IP 插补位置 · %u ms 换点）=====\r\n",
-               (unsigned)ADM_STR_MS);
-#else
         printf("\r\n[ADM] ===== 导纳控制启动（PP 位置流 · %u ms 换点）=====\r\n",
                (unsigned)ADM_STR_MS);
-#endif
         printf("[ADM] M=%.2e  B=%.2e  K=%.2e  软限位 +-%.1f deg (预设 %d)\r\n",
                (double)s_adm_m, (double)s_adm_b, (double)s_adm_k,
                (double)ADM_LIMIT_DEG, (int)ADM_PRESET);
@@ -460,8 +439,8 @@ static void App_Joint_Adm_Step(void)
     case 3u:
         /* 探一下驱动器支持哪些工作模式。0x6502 是只读位图：
          *   bit0 PP  bit1 VL  bit2 PV  bit5 IP  bit6 CSP  bit7 CSV  bit8 CST
-         * 我们关心 IP(0x20)：插补位置模式下驱动器按 0x60C2 自己插补，
-         * 不做"到点停"重规划，能消掉 PP 换点的 25 Hz 速度脉冲。 */
+         * 打印出来只作记录。这台驱动器只有 PP 真能用，IP / CSP / CSV 都实测过，
+         * bit5 那个"支持"是厂商瞎填的，见 导纳控制调参记录.md 第 9 节。 */
         if (Adm_Rd(OD_SUPPORTED_MODES, 0u, &v))
         {
             printf("[ADM] 0x6502 支持模式 = 0x%08lX :", (unsigned long)v);
@@ -473,9 +452,6 @@ static void App_Joint_Adm_Step(void)
             if (v & 0x0080u) printf(" CSV");
             if (v & 0x0100u) printf(" CST");
             printf("\r\n");
-            printf("[ADM]   IP(bit5) %s，CSP(bit6) %s\r\n",
-                   (v & 0x0020u) ? "可用" : "不支持",
-                   (v & 0x0040u) ? "可用" : "不支持");
         }
         else
         {
@@ -486,19 +462,11 @@ static void App_Joint_Adm_Step(void)
             s_adm_mode_old = (uint8_t)(int8_t)v;
             printf("[ADM] 原运行模式 0x6060 = %d（仅记录）\r\n", (int)s_adm_mode_old);
         }
-#if (ADM_USE_IP != 0u)
-        if (!Adm_Wr(OD_MODES_OF_OPERATION, 0u, JOINT_MODE_IP, 1u))
-        {
-            Adm_Fail("写 0x6060 = 7 (IP 插补位置模式) 失败");
-            return;
-        }
-#else
         if (!Adm_Wr(OD_MODES_OF_OPERATION, 0u, JOINT_MODE_PP, 1u))
         {
             Adm_Fail("写 0x6060 = 1 (PP 轮廓位置模式) 失败");
             return;
         }
-#endif
         s_adm_step = 4u;
         break;
 
@@ -508,15 +476,6 @@ static void App_Joint_Adm_Step(void)
             Adm_Fail("读 0x6061 超时");
             return;
         }
-#if (ADM_USE_IP != 0u)
-        printf("[ADM] 模式确认 %d (%s)\r\n", (int)(int8_t)v,
-               ((int8_t)v == JOINT_MODE_IP) ? "IP 插补位置模式" : "不是 IP！");
-        if ((int8_t)v != JOINT_MODE_IP)
-        {
-            Adm_Fail("模式没有切到 7 (IP)");
-            return;
-        }
-#else
         printf("[ADM] 模式确认 %d (%s)\r\n", (int)(int8_t)v,
                ((int8_t)v == JOINT_MODE_PP) ? "PP 轮廓位置模式" : "不是 PP！");
         if ((int8_t)v != JOINT_MODE_PP)
@@ -524,7 +483,6 @@ static void App_Joint_Adm_Step(void)
             Adm_Fail("模式没有切到 1 (PP)");
             return;
         }
-#endif
         s_adm_step = 5u;
         break;
 
@@ -540,41 +498,24 @@ static void App_Joint_Adm_Step(void)
         {
             printf("[ADM] 0x6081 轮廓速度 = %lu counts/s\r\n", (unsigned long)v);
         }
-#if (ADM_USE_IP != 0u)
-        /* IP 模式下 0x60C2 决定驱动器多久插补一次。只读确认，不写：
-         * 出厂 子1=1、子2=-3 = 1 ms，这个值是对的。
-         * 曾改成 10 想"与写点周期对齐"，结果 11.4 deg 稳态误差、
-         * 驱动器出力约 0、手感完全消失。别碰。 */
-        {
-            uint32_t per = 0u, exp = 0u;
-
-            if (Adm_Rd(OD_INTERP_TIME, 1u, &per) & Adm_Rd(OD_INTERP_TIME, 2u, &exp))
-            {
-                printf("[ADM] 0x60C2 插补周期 = %lu x 10^%ld ms（出厂 1 ms，保持不动）\r\n",
-                       (unsigned long)per, (long)(int32_t)(int8_t)(exp & 0xFFu));
-            }
-            else
-            {
-                printf("[ADM] 0x60C2 读不到，按出厂 1 ms 处理\r\n");
-            }
-        }
-#endif
         s_adm_step = 6u;
         break;
 
     case 6u:
-        /* 0x6083/0x6084 加减速度：PP 每 20 ms 换一次点，驱动器要能在 20 ms
-         * 内从 0 加到 ADM_VEL_MAX，所以 a >= ADM_VEL_MAX/0.02 = 400000。
-         * 取 1e6 留 2.5 倍余量，代价是每拍 v^2/(2a) = 32 counts 的规划滞后。 */
+        /* 0x6083/0x6084：PP 每 ADM_STR_MS 换一次点，一个点在 40 ms 内要走完
+         * 520 counts，加速度下限就是 4d/T^2 = 1.3e6，没有余量可省。
+         * 减速度单独给，见头文件 ADM_PROF_DECEL 的取值表。 */
         if (!Adm_Wr(OD_PROFILE_ACCEL, 0u, (uint32_t)ADM_PROF_ACC, 4u))
             printf("[WARN] 写 0x6083 失败 abort=0x%08lX\r\n",
                    (unsigned long)Dev_Joint_SdoAbortCode());
-        if (!Adm_Wr(OD_PROFILE_DECEL, 0u, (uint32_t)ADM_PROF_ACC, 4u))
+        if (!Adm_Wr(OD_PROFILE_DECEL, 0u, (uint32_t)ADM_PROF_DECEL, 4u))
             printf("[WARN] 写 0x6084 失败 abort=0x%08lX\r\n",
                    (unsigned long)Dev_Joint_SdoAbortCode());
         if (Adm_Rd(OD_PROFILE_ACCEL, 0u, &v))
             printf("[ADM] 0x6083 轮廓加速度 = %lu counts/s^2（换点周期 %u ms）\r\n",
                    (unsigned long)v, (unsigned)ADM_STR_MS);
+        if (Adm_Rd(OD_PROFILE_DECEL, 0u, &v))
+            printf("[ADM] 0x6084 轮廓减速度 = %lu counts/s^2\r\n", (unsigned long)v);
         s_adm_step = 7u;
         break;
 
@@ -600,8 +541,7 @@ static void App_Joint_Adm_Step(void)
         s_adm_pos_ref   = (int32_t)v;
         s_adm_pos_fdb   = s_adm_pos_ref;
         s_adm_pos_cmd   = (float)s_adm_pos_ref;
-        s_adm_pos_tgt   = (float)s_adm_pos_ref;   /* 静止时超前量 = 0 */
-        s_adm_lead_v    = 0.0f;
+        s_adm_pos_tgt   = (float)s_adm_pos_ref;
         s_adm_delta_pos = 0.0f;
         s_adm_delta_vel = 0.0f;
         s_adm_tau_grav  = App_Joint_GetGravityTorque(s_adm_pos_fdb);
@@ -660,8 +600,7 @@ static void App_Joint_Adm_Step(void)
         s_adm_pos_ref   = (int32_t)v;
         s_adm_pos_fdb   = s_adm_pos_ref;
         s_adm_pos_cmd   = (float)s_adm_pos_ref;
-        s_adm_pos_tgt   = (float)s_adm_pos_ref;   /* 静止时超前量 = 0 */
-        s_adm_lead_v    = 0.0f;
+        s_adm_pos_tgt   = (float)s_adm_pos_ref;
         s_adm_delta_pos = 0.0f;
         s_adm_delta_vel = 0.0f;
         s_adm_tau_grav  = App_Joint_GetGravityTorque(s_adm_pos_fdb);
@@ -699,6 +638,7 @@ static void App_Joint_Adm_Step(void)
         s_adm_tgt_prev = (int32_t)s_adm_pos_tgt;
         s_adm_jump_pk  = 0;
         s_adm_err_pk   = 0;
+        s_adm_vel_at_pk = 0;
 
         /* TIM3 提到 1 kHz：PSC 固定 71（1 MHz），ARR 从 10000-1 改成 999 */
         htim3.Instance->ARR = (uint32_t)(ADM_TIM_ARR - 1u);
@@ -719,15 +659,10 @@ static void App_Joint_Adm_Step(void)
         printf("[ADM] [ OK ] 控制环已启动，按键再按一次停机\r\n");
         printf("[ADM]    t_ms     cmd    fdb    err     tgt tau_ext  ok  bad    tq     vel\r\n");
         printf("[ADM]   tgt = 最后一次采信的 0x607A；tq = 0x6077(‰额定)；vel = 0x606C(counts/s)\r\n");
-        printf("[ADM]   err = tgt - fdb（驱动器真正感受到的偏差，不是 cmd - fdb）\r\n");
-        printf("[ADM]   速度上限 %.0f counts/s (%.1f deg/s)，超前补偿 %.0f ms\r\n",
-               (double)ADM_VEL_MAX, (double)COUNT_TO_DEG((int32_t)ADM_VEL_MAX), (double)ADM_LEAD_MS);
-#if (ADM_USE_IP != 0u)
-        printf("[ADM]   机制：IP 插补（0x6060=7，只写 0x607A，驱动器按 0x60C2 自己插补）\r\n");
-        printf("[ADM]   vel 应连续变化；若 vel 仍是 +-24000 脉冲，说明 IP 也按 0x6083 重规划\r\n");
-#else
+        printf("[ADM]   err = cmd - fdb（驱动器真正感受到的偏差，正比于顶力）\r\n");
+        printf("[ADM]   速度上限 %.0f counts/s (%.1f deg/s)，无超前补偿\r\n",
+               (double)ADM_VEL_MAX, (double)COUNT_TO_DEG((int32_t)ADM_VEL_MAX));
         printf("[ADM]   机制：PP 轮廓（0x0F->0x607A->0x3F 三帧 SDO）\r\n");
-#endif
         break;
 
     default:
@@ -859,16 +794,11 @@ void App_Joint_Adm_Stop(void)
         printf("[ADM] 递推 %lu 拍(100 Hz) / 换点成功 %lu 次 / 失败 %lu 次\r\n",
                (unsigned long)s_adm_beat, (unsigned long)s_adm_pp_ok,
                (unsigned long)s_adm_pp_bad);
-        /* 上限 = 限速贡献 VEL_MAX*DT + 超前项贡献 2*VEL_MAX*LEAD_S*LPF
-         *      = 130 + 183 = 313 counts。
-         * 超前项前面那个 2 不能漏：换向时 delta_vel 是跨零翻转（-V 直接到 +V），
-         * 超前量单拍变化量是 2*V*LPF，不是 V*LPF。少乘 2 会误判"超限"。 */
+        /* 没有超前项，单拍跳变上限就是限速贡献 VEL_MAX*DT = 130 counts */
         printf("[ADM] 单拍位置指令跳变峰值 = %ld counts（理论上限 %ld）\r\n",
-               (long)s_adm_jump_pk,
-               (long)(int32_t)(ADM_VEL_MAX * ADM_DT
-                               + 2.0f * ADM_VEL_MAX * ADM_LEAD_S * ADM_LEAD_LPF));
-        printf("[ADM] |指令-反馈| 峰值 = %ld counts (%.1f deg)\r\n",
-               (long)s_adm_err_pk, (double)COUNT_TO_DEG(s_adm_err_pk));
+               (long)s_adm_jump_pk, (long)(int32_t)(ADM_VEL_MAX * ADM_DT));
+        printf("[ADM] |指令-反馈| 峰值 = %ld counts (%.1f deg)，出现在速度 %+ld counts/s 时\r\n",
+               (long)s_adm_err_pk, (double)COUNT_TO_DEG(s_adm_err_pk), (long)s_adm_vel_at_pk);
         printf("[ADM] 净漂移 %+ld counts (%.3f deg)\r\n",
                (long)(s_adm_pos_fdb - s_adm_pos_home),
                (double)COUNT_TO_DEG(s_adm_pos_fdb - s_adm_pos_home));
@@ -971,6 +901,7 @@ void App_Joint_Adm_Task(void)
         s_adm_tgt_prev = (int32_t)s_adm_pos_tgt;
         s_adm_jump_pk  = 0;
         s_adm_err_pk   = 0;
+        s_adm_vel_at_pk = 0;
     }
 
     /* ---- 看门狗 0：驱动器自己还活着吗（状态字来自 TPDO，不占 SDO）---- */
@@ -1401,6 +1332,7 @@ void App_Joint_GravScan_Task(void)
         break;
     }
 }
+
 /* =====================================================================
  *  九、模块入口（main 主循环调用）
  * ===================================================================== */

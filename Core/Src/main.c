@@ -112,7 +112,7 @@ int main(void)
 		App_NJ70_Task();
 		App_Joint_Task();
 		App_Joint_Adm_Task();        /* 导纳环：状态机 + PP 换点 + 发帧（ISR 里只算控制量） */
-		//App_Joint_GravScan_Task();   /* PP 8 点扫角，标定重力矩时打开 */
+		//App_Joint_GravScan_Task(); /* PP 8 点扫角，标定重力矩时打开 */
 		
     /* USER CODE END WHILE */
 
