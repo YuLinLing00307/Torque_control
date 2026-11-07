@@ -1,6 +1,6 @@
 Dependencies for Project 'Torque_control', Target 'Torque_control': (DO NOT MODIFY !)
 CompilerVersion: 5060960::V5.06 update 7 (build 960)::.\ARMCC
-F (..\Drivers\APP\app_user.c)(0x6AE8815B)(--c99 -c --cpu Cortex-M3 -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/APP -I ../Drivers/BSP -I ../Drivers/Common -I ../Drivers/Devices-I.\RTE\_Torque_control-ID:\Keil_v5\Arm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include-ID:\Keil_v5\Arm\Packs\Keil\STM32F1xx_DFP\2.2.0\Device\Include-D__UVISION_VERSION="534" -D_RTE_ -DSTM32F10X_HD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xE-o torque_control\app_user.o --omf_browse torque_control\app_user.crf --depend torque_control\app_user.d)
+F (..\Drivers\APP\app_user.c)(0x6AEABE94)(--c99 -c --cpu Cortex-M3 -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/APP -I ../Drivers/BSP -I ../Drivers/Common -I ../Drivers/Devices-I.\RTE\_Torque_control-ID:\Keil_v5\Arm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include-ID:\Keil_v5\Arm\Packs\Keil\STM32F1xx_DFP\2.2.0\Device\Include-D__UVISION_VERSION="534" -D_RTE_ -DSTM32F10X_HD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xE-o torque_control\app_user.o --omf_browse torque_control\app_user.crf --depend torque_control\app_user.d)
 I (..\Drivers\APP\app_user.h)(0x6AE85997)
 I (../Core/Inc/main.h)(0x6AE4834F)
 I (../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h)(0x669E6878)
@@ -40,12 +40,12 @@ I (D:\Keil_v5\ARM\ARMCC\include\stdlib.h)(0x5E8E3CC2)
 I (D:\Keil_v5\ARM\ARMCC\include\stdio.h)(0x5E8E3CC2)
 I (D:\Keil_v5\ARM\ARMCC\include\string.h)(0x5E8E3CC2)
 I (D:\Keil_v5\ARM\ARMCC\include\math.h)(0x5E8E3CC2)
-I (..\Drivers\APP\app_joint.h)(0x6AE881B8)
+I (..\Drivers\APP\app_joint.h)(0x6AEECAA2)
 I (../Drivers/Devices/dev_joint.h)(0x6AE88174)
 I (../Drivers/Devices/dev_joint_od.h)(0x6AE88174)
 I (../Drivers/BSP/bsp_can.h)(0x6AE85997)
 F (..\Drivers\APP\app_user.h)(0x6AE85997)()
-F (..\Drivers\APP\app_nj70.c)(0x6AE85997)(--c99 -c --cpu Cortex-M3 -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/APP -I ../Drivers/BSP -I ../Drivers/Common -I ../Drivers/Devices-I.\RTE\_Torque_control-ID:\Keil_v5\Arm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include-ID:\Keil_v5\Arm\Packs\Keil\STM32F1xx_DFP\2.2.0\Device\Include-D__UVISION_VERSION="534" -D_RTE_ -DSTM32F10X_HD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xE-o torque_control\app_nj70.o --omf_browse torque_control\app_nj70.crf --depend torque_control\app_nj70.d)
+F (..\Drivers\APP\app_nj70.c)(0x6AEECBCA)(--c99 -c --cpu Cortex-M3 -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/APP -I ../Drivers/BSP -I ../Drivers/Common -I ../Drivers/Devices-I.\RTE\_Torque_control-ID:\Keil_v5\Arm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include-ID:\Keil_v5\Arm\Packs\Keil\STM32F1xx_DFP\2.2.0\Device\Include-D__UVISION_VERSION="534" -D_RTE_ -DSTM32F10X_HD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xE-o torque_control\app_nj70.o --omf_browse torque_control\app_nj70.crf --depend torque_control\app_nj70.d)
 I (..\Drivers\APP\app_nj70.h)(0x6AE85997)
 I (../Core/Inc/main.h)(0x6AE4834F)
 I (../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h)(0x669E6878)
@@ -89,13 +89,13 @@ I (../Drivers/Devices/dev_nj70.h)(0x6AE85997)
 I (../Drivers/BSP/bsp_rs485.h)(0x6AE85997)
 I (../Drivers/Common/com_crc.h)(0x6AE85997)
 I (../Drivers/Common/com_filter.h)(0x6AE85997)
-I (..\Drivers\APP\app_joint.h)(0x6AE881B8)
+I (..\Drivers\APP\app_joint.h)(0x6AEECAA2)
 I (../Drivers/Devices/dev_joint.h)(0x6AE88174)
 I (../Drivers/Devices/dev_joint_od.h)(0x6AE88174)
 I (../Drivers/BSP/bsp_can.h)(0x6AE85997)
 F (..\Drivers\APP\app_nj70.h)(0x6AE85997)()
-F (..\Drivers\APP\app_joint.c)(0x6AE881E8)(--c99 -c --cpu Cortex-M3 -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/APP -I ../Drivers/BSP -I ../Drivers/Common -I ../Drivers/Devices-I.\RTE\_Torque_control-ID:\Keil_v5\Arm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include-ID:\Keil_v5\Arm\Packs\Keil\STM32F1xx_DFP\2.2.0\Device\Include-D__UVISION_VERSION="534" -D_RTE_ -DSTM32F10X_HD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xE-o torque_control\app_joint.o --omf_browse torque_control\app_joint.crf --depend torque_control\app_joint.d)
-I (..\Drivers\APP\app_joint.h)(0x6AE881B8)
+F (..\Drivers\APP\app_joint.c)(0x6AEECE52)(--c99 -c --cpu Cortex-M3 -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/APP -I ../Drivers/BSP -I ../Drivers/Common -I ../Drivers/Devices-I.\RTE\_Torque_control-ID:\Keil_v5\Arm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include-ID:\Keil_v5\Arm\Packs\Keil\STM32F1xx_DFP\2.2.0\Device\Include-D__UVISION_VERSION="534" -D_RTE_ -DSTM32F10X_HD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xE-o torque_control\app_joint.o --omf_browse torque_control\app_joint.crf --depend torque_control\app_joint.d)
+I (..\Drivers\APP\app_joint.h)(0x6AEECAA2)
 I (../Core/Inc/main.h)(0x6AE4834F)
 I (../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h)(0x669E6878)
 I (../Core/Inc/stm32f1xx_hal_conf.h)(0x6AE190F5)
@@ -142,7 +142,7 @@ I (../Drivers/Devices/dev_nj70.h)(0x6AE85997)
 I (../Drivers/BSP/bsp_rs485.h)(0x6AE85997)
 I (../Drivers/Common/com_crc.h)(0x6AE85997)
 I (../Drivers/Common/com_filter.h)(0x6AE85997)
-F (..\Drivers\APP\app_joint.h)(0x6AE881B8)()
+F (..\Drivers\APP\app_joint.h)(0x6AEECAA2)()
 F (..\Drivers\Devices\dev_nj70.c)(0x6AE85997)(--c99 -c --cpu Cortex-M3 -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/APP -I ../Drivers/BSP -I ../Drivers/Common -I ../Drivers/Devices-I.\RTE\_Torque_control-ID:\Keil_v5\Arm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include-ID:\Keil_v5\Arm\Packs\Keil\STM32F1xx_DFP\2.2.0\Device\Include-D__UVISION_VERSION="534" -D_RTE_ -DSTM32F10X_HD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xE-o torque_control\dev_nj70.o --omf_browse torque_control\dev_nj70.crf --depend torque_control\dev_nj70.d)
 I (..\Drivers\Devices\dev_nj70.h)(0x6AE85997)
 I (../Core/Inc/main.h)(0x6AE4834F)
@@ -313,7 +313,7 @@ I (D:\Keil_v5\ARM\ARMCC\include\string.h)(0x5E8E3CC2)
 I (D:\Keil_v5\ARM\ARMCC\include\math.h)(0x5E8E3CC2)
 I (../Drivers/Common/com_crc.h)(0x6AE85997)
 F (..\Drivers\BSP\bsp_rs485.h)(0x6AE85997)()
-F (../Core/Src/main.c)(0x6AE8815B)(--c99 -c --cpu Cortex-M3 -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/APP -I ../Drivers/BSP -I ../Drivers/Common -I ../Drivers/Devices-I.\RTE\_Torque_control-ID:\Keil_v5\Arm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include-ID:\Keil_v5\Arm\Packs\Keil\STM32F1xx_DFP\2.2.0\Device\Include-D__UVISION_VERSION="534" -D_RTE_ -DSTM32F10X_HD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xE-o torque_control\main.o --omf_browse torque_control\main.crf --depend torque_control\main.d)
+F (../Core/Src/main.c)(0x6AEECDD1)(--c99 -c --cpu Cortex-M3 -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/APP -I ../Drivers/BSP -I ../Drivers/Common -I ../Drivers/Devices-I.\RTE\_Torque_control-ID:\Keil_v5\Arm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include-ID:\Keil_v5\Arm\Packs\Keil\STM32F1xx_DFP\2.2.0\Device\Include-D__UVISION_VERSION="534" -D_RTE_ -DSTM32F10X_HD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xE-o torque_control\main.o --omf_browse torque_control\main.crf --depend torque_control\main.d)
 I (../Core/Inc/main.h)(0x6AE4834F)
 I (../Drivers/STM32F1xx_HAL_Driver/Inc/stm32f1xx_hal.h)(0x669E6878)
 I (../Core/Inc/stm32f1xx_hal_conf.h)(0x6AE190F5)
@@ -353,7 +353,7 @@ I (D:\Keil_v5\ARM\ARMCC\include\stdio.h)(0x5E8E3CC2)
 I (D:\Keil_v5\ARM\ARMCC\include\string.h)(0x5E8E3CC2)
 I (D:\Keil_v5\ARM\ARMCC\include\math.h)(0x5E8E3CC2)
 I (../Drivers/APP/app_user.h)(0x6AE85997)
-I (../Drivers/APP/app_joint.h)(0x6AE881B8)
+I (../Drivers/APP/app_joint.h)(0x6AEECAA2)
 I (../Drivers/Devices/dev_joint.h)(0x6AE88174)
 I (../Drivers/Devices/dev_joint_od.h)(0x6AE88174)
 I (../Drivers/BSP/bsp_can.h)(0x6AE85997)

@@ -34,6 +34,7 @@ extern TIM_HandleTypeDef htim3;
 #define ADM_STOP_FDB_LOST  5u    /* TPDO 不来帧 */
 #define ADM_STOP_STEP      6u    /* 启动流程失败 */
 #define ADM_STOP_DRV_FAULT 7u    /* 驱动器自身故障（0x6041 bit3）*/
+#define ADM_STOP_NOCT      8u    /* 力控：走了很远还没读到力，挡块不在范围内 */
 
 /* ---- 位置读数合理性校验：挡住节点重连 / 半帧拼接产生的离谱值 ---- */
 #define ADM_FDB_ABS_MAX      (1048576L)  /* +-2 圈 */
@@ -75,6 +76,18 @@ static volatile float   s_adm_b     = ADM_B;
 static volatile float   s_adm_k     = ADM_K;
 static volatile float   s_adm_inv_m = 1.0f / ADM_M;
 
+#if (APP_JOINT_FC != 0u)
+/* ---- 力控状态（ISR 写，主循环读）----
+ * 命名统一 s_fc_ 前缀 = force control，后缀表明物理量：
+ *   _tau_cmd / _tau_meas 力矩 [N.m]，_delta_pos 位置偏移 [counts]，_gear 档位。
+ * 第 0 档必须是 0：启动后不加力，靠 KEY1 一档一档加上去。 */
+static const float      s_fc_cmd_tab[FC_CMD_NUM] = { 0.0f, 0.3f, 0.5f, 1.0f, 2.0f };
+static volatile uint8_t s_fc_gear      = 0u;      /* 当前档位索引 0..FC_CMD_NUM-1 */
+static volatile float   s_fc_tau_cmd   = 0.0f;    /* 期望力矩 [N.m] */
+static volatile float   s_fc_tau_meas  = 0.0f;    /* 臂实际输出力矩 [N.m] = -(tap - grav) */
+static volatile float   s_fc_delta_pos = 0.0f;    /* 位置偏移（积分器状态）：相对 pos_ref [counts] */
+#endif
+
 /* ---- 位置反馈 ---- */
 static volatile int32_t s_adm_pos_ref   = 0;      /* 平衡位置，启动时定 */
 static int32_t          s_adm_pos_home  = 0;      /* 软限位基准 */
@@ -113,10 +126,12 @@ static volatile int32_t s_adm_jump_pk  = 0;
 static volatile int32_t s_adm_err_pk   = 0;   /* max|tgt-fdb|，顶力的正比量 */
 static volatile int32_t s_adm_vel_at_pk = 0;  /* err_pk 出现时的递推速度 */
 
-/* ---- 打印缓存 ---- */
+/* ---- 打印缓存（只有零力顺应模式用，力控模式不用这两条 SDO）---- */
+#if (APP_JOINT_FC == 0u)
 static int32_t s_adm_tq_pm    = 0;                /* 0x6077 permille 额定 */
 static int32_t s_adm_vel_fb   = 0;                /* 0x606C counts/s */
 static int32_t s_adm_tau_echo = 0;                /* 外力矩 mN.m */
+#endif
 
 /* ---- 扫角自检 ---- */
 static int32_t  s_pos0     = 0;
@@ -279,7 +294,9 @@ static void Adm_ApplyGain(uint8_t idx)
 static void Adm_Solve100(void)
 {
     float   tau_ext;
-    float   acc_cmd;
+#if (APP_JOINT_FC == 0u)
+    float   acc_cmd;                    /* 只有零力顺应才用得到 */
+#endif
     float   delta_vel;
     float   delta_pos;
     float   pos_cmd;
@@ -306,6 +323,65 @@ static void Adm_Solve100(void)
         tau_ext = 0.0f;
     }
 
+#if (APP_JOINT_FC != 0u)
+    /* ---- 力控：力误差 -> 位置积分。K 项不参与，M/B 也不用 ----
+     * 稳态 tau_ext = tau_cmd，与挡块装在哪儿无关（推导见头文件第四节）。
+     * 顶住挡块时 tau_ext 就是关节输出力矩，指令 1 N.m 就代表真的出 1 N.m。 */
+    if (s_adm_hold != 0u)
+    {
+        /* 静态自检：积分器必须冻在 0，否则 F_cmd 一非零目标就跑了，
+         * "钉死看驱动器报不报错"这条自检就废了。KEY1 那边也拦了一道。 */
+        s_fc_delta_pos = 0.0f;
+        s_fc_tau_meas  = 0.0f;
+        delta_vel      = 0.0f;
+        delta_pos      = 0.0f;
+        pos_cmd        = (float)s_adm_pos_ref;
+    }
+    else
+    {
+        float tau_out;      /* 臂实际输出力矩 [N.m] = -tau_ext */
+        float err_tau;      /* 力误差 = 期望输出 - 实际输出 [N.m] */
+        float step;         /* 本拍位置增量 [counts] */
+        float delta_next;   /* 累加后的位置偏移 [counts] */
+        float dev_cnt;      /* 指令超前实际多少 [counts] */
+
+        /* tau_ext 是"外界施加在关节上"的力矩。臂往 +dir 顶挡块时，
+         * 挡块反推回来方向相反 -> tau_ext 与臂出力符号相反。
+         * 力控要控的是"臂出了多大力"，所以先翻回来：
+         *     臂输出 tau_out = -tau_ext
+         * 自由空间 tau_out ≈ 0，F_cmd=+1 -> err=+1 -> 往正方向走；
+         * 顶住挡块 tau_out = +1 -> err=0 -> 停在该力上。
+         * 用 tau_ext 直接做误差是正反馈：越顶力越大，直到保护停机
+         * （2026-11-07 实测日志：F_cmd=+1.0，tau_ext 从 -0.04 一路掉到 -3.27）。 */
+        tau_out = -tau_ext;
+        err_tau = s_fc_tau_cmd - tau_out;
+
+        /* K=0 导纳展开就是这一个积分器：
+         *     pos_cmd = pos_ref + Ki * INT(tau_cmd - tau_out) dt
+         * 力不足就往前挪，力超了就退回来，方向和大小都由误差自己决定，
+         * 不需要分"接近段/力控段"。 */
+        step       = err_tau * FC_KI_POS * ADM_DT;
+        delta_next = s_fc_delta_pos + step;
+
+        if (delta_next >  FC_DELTA_MAX) delta_next =  FC_DELTA_MAX;
+        if (delta_next < -FC_DELTA_MAX) delta_next = -FC_DELTA_MAX;
+
+        /* 已经超前 FC_DEV_WIN 就停止同向推进；反向仍然允许，要能退回来 */
+        dev_cnt = ((float)s_adm_pos_ref + delta_next) - (float)s_adm_pos_fdb;
+        if ((dev_cnt >  FC_DEV_WIN && step > 0.0f) ||
+            (dev_cnt < -FC_DEV_WIN && step < 0.0f))
+        {
+            delta_next = s_fc_delta_pos;
+        }
+
+        s_fc_delta_pos = delta_next;
+        s_fc_tau_meas  = tau_out;
+
+        delta_vel = 0.0f;
+        delta_pos = delta_next;
+        pos_cmd   = (float)s_adm_pos_ref + delta_next;
+    }
+#else
     delta_vel = s_adm_delta_vel;
     delta_pos = s_adm_delta_pos;
 
@@ -322,6 +398,7 @@ static void Adm_Solve100(void)
     delta_pos += delta_vel * ADM_DT;
 
     pos_cmd = (float)s_adm_pos_ref + delta_pos;
+#endif
 
     /* 软限位相对启动位置，纯粹钳位 */
     pos_lo = (float)(s_adm_pos_home - ADM_LIMIT_CNT);
@@ -338,6 +415,16 @@ static void Adm_Solve100(void)
         delta_pos = pos_lo - (float)s_adm_pos_ref;
         if (delta_vel < 0.0f) delta_vel = 0.0f;
     }
+
+#if (APP_JOINT_FC != 0u)
+    /* 软限位上面对 pos_cmd 钳过位之后，积分器状态也要跟着回退，
+     * 否则 s_fc_delta_pos 会继续累加(windup)，反向时要先"还债"才动。
+     * 正常拍 delta_pos 就等于 s_fc_delta_pos，这一步是幂等的。 */
+    if (s_adm_hold == 0u)
+    {
+        s_fc_delta_pos = delta_pos;
+    }
+#endif
 
     s_adm_delta_pos = delta_pos;
     s_adm_delta_vel = delta_vel;
@@ -358,7 +445,7 @@ static void Adm_Solve100(void)
         if (j > s_adm_jump_pk) s_adm_jump_pk = j;
         if (e > s_adm_err_pk)
         {
-            s_adm_err_pk    = e;
+            s_adm_err_pk    = e; 
             s_adm_vel_at_pk = (int32_t)delta_vel;
         }
         s_adm_tgt_prev = target;
@@ -402,6 +489,14 @@ static void App_Joint_Adm_Step(void)
     {
     case 1u:
         Dev_Joint_SetPosFreeze(1u);      /* 独占 SDO：挡住 app_nj70 的周期性位置读 */
+#if (APP_JOINT_FC != 0u)
+        printf("\r\n[ADM] ===== 力控模式启动（PP 位置流 · %u ms 换点）=====\r\n",
+               (unsigned)ADM_STR_MS);
+        printf("[ADM] K 已置 0（力控必须），Ki=%.0f counts/(N.m.s)  软限位 +-%.1f deg\r\n",
+               (double)FC_KI_POS, (double)ADM_LIMIT_DEG);
+        printf("[ADM] 力矩符号 %.0f  积分上限 %.0f counts  越界窗口 %.0f counts\r\n",
+               (double)ADM_TAU_SIGN, (double)FC_DELTA_MAX, (double)FC_DEV_WIN);
+#else
         printf("\r\n[ADM] ===== 导纳控制启动（PP 位置流 · %u ms 换点）=====\r\n",
                (unsigned)ADM_STR_MS);
         printf("[ADM] M=%.2e  B=%.2e  K=%.2e  软限位 +-%.1f deg (预设 %d)\r\n",
@@ -411,6 +506,7 @@ static void App_Joint_Adm_Step(void)
                (double)ADM_TAU_SIGN, (double)(s_adm_m * 83443.0f),
                (double)(s_adm_k * 83443.0f / 57.2958f),
                (unsigned)(s_adm_gain_cur + 1u), (unsigned)ADM_GAIN_LEVELS);
+#endif
         if (torque_first_flag == 0u)
         {
             Adm_Fail("力矩传感器没有数据，先查 App_NJ70_Task / RS485");
@@ -635,6 +731,14 @@ static void App_Joint_Adm_Step(void)
         s_adm_fdb_valid = 1u;                 /* 锚点已经可信 */
         s_adm_pos_home  = s_adm_pos_ref;      /* 软限位的绝对基准，之后不再动 */
 
+#if (APP_JOINT_FC != 0u)
+        /* 每次启动都从 0 力开始，绝不复用上次的 F_cmd */
+        s_fc_gear  = 0u;
+        s_fc_tau_cmd  = 0.0f;
+        s_fc_delta_pos  = 0.0f;
+        s_fc_tau_meas = 0.0f;
+#endif
+
         s_adm_tgt_prev = (int32_t)s_adm_pos_tgt;
         s_adm_jump_pk  = 0;
         s_adm_err_pk   = 0;
@@ -656,6 +760,16 @@ static void App_Joint_Adm_Step(void)
 
         s_adm_run  = 1u;
         s_adm_step = ADM_STEP_RUN;
+#if (APP_JOINT_FC != 0u)
+        printf("[ADM] [ OK ] 力环已启动（K=0 纯积分）。KEY1 加力/减力，KEY0 停机\r\n");
+        printf("[ADM]    t_ms     cmd    fdb    err  travel  F_cmd  F_meas   e_F  ok  bad\r\n");
+        printf("[ADM]   travel = cmd - pos_ref，积分器把指令推出了多远（counts）\r\n");
+        printf("[ADM]   F_cmd = KEY1 设定的期望出力；F_meas = 臂实际出力 = -(传感器-重力)\r\n");
+        printf("[ADM]   e_F = F_cmd - F_meas，积分器就是把这个值压到 0\r\n");
+        printf("[ADM]   err = cmd - fdb（驱动器感受到的偏差，约 1.47 N.m/deg）\r\n");
+        printf("[ADM]   当前 F_cmd = 0.0 N.m。挡块在 41 deg 以内都会自己找过去，再按 KEY1\r\n");
+        printf("[ADM]   注意：自由空间里它按 Ki*F_cmd 的速度前进（0.3 档 0.41 deg/s），不是故障\r\n");
+#else
         printf("[ADM] [ OK ] 控制环已启动，按键再按一次停机\r\n");
         printf("[ADM]    t_ms     cmd    fdb    err     tgt tau_ext  ok  bad    tq     vel\r\n");
         printf("[ADM]   tgt = 最后一次采信的 0x607A；tq = 0x6077(‰额定)；vel = 0x606C(counts/s)\r\n");
@@ -663,6 +777,7 @@ static void App_Joint_Adm_Step(void)
         printf("[ADM]   速度上限 %.0f counts/s (%.1f deg/s)，无超前补偿\r\n",
                (double)ADM_VEL_MAX, (double)COUNT_TO_DEG((int32_t)ADM_VEL_MAX));
         printf("[ADM]   机制：PP 轮廓（0x0F->0x607A->0x3F 三帧 SDO）\r\n");
+#endif
         break;
 
     default:
@@ -776,7 +891,7 @@ void App_Joint_Adm_Stop(void)
     switch (s_adm_stop_rsn)
     {
     case ADM_STOP_KEY:  printf("按键\r\n");                          break;
-    case ADM_STOP_TAU:  printf("外力矩超 %.1f N.m\r\n", (double)ADM_TAU_STOP); break;
+    case ADM_STOP_TAU:  printf("力矩超 %.1f N.m\r\n", (double)ADM_TAU_LIMIT); break;
     case ADM_STOP_ERR:  printf("跟随误差超 %ld counts\r\n", (long)ADM_FOLLOW_ERR_MAX); break;
     case ADM_STOP_PP:   printf("PP 换点连续 %u 次失败（SDO 不通 / 驱动器拒绝）\r\n",
                                (unsigned)ADM_PP_FAIL_STOP); break;
@@ -786,6 +901,14 @@ void App_Joint_Adm_Stop(void)
                (unsigned long)(s_adm_drv_err & 0xFFFFu), Adm_DrvFaultName(s_adm_drv_err));
         break;
     case ADM_STOP_STEP: printf("启动流程失败\r\n");                  break;
+#if (APP_JOINT_FC != 0u)
+    case ADM_STOP_NOCT:
+        printf("没顶到挡块：位移已超 %.0f counts (%.1f deg)，实测力仍低于 %.2f N.m\r\n",
+               (double)FC_NO_CT_CNT, (double)COUNT_TO_DEG((int32_t)FC_NO_CT_CNT),
+               (double)FC_NO_CT_TAU);
+        printf("  力控在自由空间里只会一直往前爬，说明挡块不在 41 deg 行程内\r\n");
+        break;
+#endif
     default:            printf("未知\r\n");                          break;
     }
 
@@ -802,6 +925,10 @@ void App_Joint_Adm_Stop(void)
         printf("[ADM] 净漂移 %+ld counts (%.3f deg)\r\n",
                (long)(s_adm_pos_fdb - s_adm_pos_home),
                (double)COUNT_TO_DEG(s_adm_pos_fdb - s_adm_pos_home));
+#if (APP_JOINT_FC != 0u)
+        printf("[ADM] 力控：F_cmd = %+.2f N.m，停机前实测 %+.3f N.m，偏差 %+.2f N.m\r\n",
+               (double)s_fc_tau_cmd, (double)s_fc_tau_meas, (double)(s_fc_tau_cmd - s_fc_tau_meas));
+#endif
     }
 
     (void)Dev_Joint_SdoPoll(&v);
@@ -941,7 +1068,8 @@ void App_Joint_Adm_Task(void)
      * NJ70 夹在关节与连杆之间，读的是关节输出轴作用在连杆上的力矩，
      * 里面包含驱动器自己的出力。所以阈值放到 12 N.m 并且要连续 10 拍。 */
     te = torque - s_adm_tau_grav;
-    if (te > ADM_TAU_STOP || te < -ADM_TAU_STOP)
+    /* 力控模式阈值是 FC_TAU_MAX(3)，目标是 0.3~1.5；零力顺应仍是 20 */
+    if (te > ADM_TAU_LIMIT || te < -ADM_TAU_LIMIT)
     {
         if (s_adm_tau_cnt < 200u) s_adm_tau_cnt++;
         if (s_adm_tau_cnt >= ADM_TAU_STOP_CNT)
@@ -981,6 +1109,49 @@ void App_Joint_Adm_Task(void)
         s_adm_err_cnt = 0u;
     }
 
+#if (APP_JOINT_FC != 0u)
+    /* ---- 看门狗 4：找不到挡块 ----
+     * 力控的本质是"力不够就往前挪"，没有挡块时误差恒等于 F_cmd，
+     * 积分器会以 Ki*F_cmd 的速度一直爬（实测 0.3 N.m -> 0.45 deg/s，
+     * 与理论一分不差）。以前靠 FC_DELTA_MAX 无声卡死，看不出为什么不动。
+     * 现在明确停机并报出"走了多远、力是多少"。 */
+    if (s_adm_hold == 0u)
+    {
+        float d = s_adm_pos_cmd - (float)s_adm_pos_ref;
+        float f = s_fc_tau_meas;
+
+        if (d < 0.0f) d = -d;
+        if (f < 0.0f) f = -f;
+
+        if (d > FC_NO_CT_CNT && f < FC_NO_CT_TAU &&
+            (s_fc_tau_cmd > 0.05f || s_fc_tau_cmd < -0.05f))
+        {
+            s_adm_stop_rsn = ADM_STOP_NOCT;
+            App_Joint_Adm_Stop();
+            return;
+        }
+    }
+
+    /* ---- 力控打印（200 ms）----
+     * 不读 0x6077 / 0x606C：200 ms 一次会和换点抢 SDO 通道，
+     * 力控只需要 F_meas，而力矩是传感器 100 Hz 白给的。 */
+    if ((uwTick - s_adm_print_t) >= FC_PRINT_MS)
+    {
+        s_adm_print_t = uwTick;
+
+        printf("[FC] %6lu  %7ld  %7ld  %5ld  %6ld  %+5.2f  %+6.3f  %+5.2f  %4lu %4lu\r\n",
+               (unsigned long)(uwTick - s_adm_run_t0),
+               (long)(int32_t)s_adm_pos_cmd,
+               (long)s_adm_pos_fdb,
+               (long)err,
+               (long)((int32_t)s_adm_pos_cmd - s_adm_pos_ref + 0),   /* travel */
+               (double)s_fc_tau_cmd,
+               (double)s_fc_tau_meas,
+               (double)(s_fc_tau_cmd - s_fc_tau_meas),
+               (unsigned long)s_adm_pp_ok,
+               (unsigned long)s_adm_pp_bad);
+    }
+#else
     /* ---- 定期打印（500 ms）---- */
     if ((uwTick - s_adm_print_t) >= 500u)
     {
@@ -1003,6 +1174,7 @@ void App_Joint_Adm_Task(void)
                (unsigned long)s_adm_pp_bad,
                (long)s_adm_tq_pm, (long)s_adm_vel_fb);
     }
+#endif
 }
 /* =====================================================================
  *  七、增益档位（KEY1 调用）
@@ -1054,6 +1226,30 @@ uint8_t App_Joint_Adm_CycleGain(void)
 
     return (uint8_t)(idx + 1u);
 }
+
+/* KEY1 统一入口：力控模式切 F_cmd，零力顺应模式切增益档。
+ * 力控只在运行态允许改 —— 启动流程和静态自检期间 F_cmd 必须保持 0，
+ * 否则自检那 2 s 会一边"钉死目标"一边往积分器里灌力指令。 */
+void App_Joint_Adm_Key1(void)
+{
+#if (APP_JOINT_FC != 0u)
+    if (s_adm_step != ADM_STEP_RUN || s_adm_hold != 0u)
+    {
+        printf("[FC] 还在启动或静态自检，等\"静态保持自检通过\"那行出来再按\r\n");
+        return;
+    }
+
+    s_fc_gear = (uint8_t)((s_fc_gear + 1u) % FC_CMD_NUM);
+    s_fc_tau_cmd = s_fc_cmd_tab[s_fc_gear];
+
+    printf("[FC] F_cmd = %.1f N.m（档 %u/%u），下一拍生效\r\n",
+           (double)s_fc_tau_cmd,
+           (unsigned)(s_fc_gear + 1u), (unsigned)FC_CMD_NUM);
+#else
+    (void)App_Joint_Adm_CycleGain();
+#endif
+}
+
 /* =====================================================================
  *  八、重力矩补偿与扫角自检
  * ===================================================================== */

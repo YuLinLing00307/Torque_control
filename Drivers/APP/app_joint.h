@@ -50,9 +50,9 @@
 #endif
 
 #if   ADM_PRESET == 1
-#define ADM_M               (1.0e-6f)               /* 虚拟质量 */
-#define ADM_B               (2.0e-5f)               /* 阻尼 */
-#define ADM_K               (2.5e-5f)               /* 刚度 N.m/count（= 0.036 N.m/deg） */
+#define ADM_M               (1.0e-6)               /* 虚拟质量 */
+#define ADM_B               (7.0e-6)               /* 阻尼 */
+#define ADM_K               (1.8e-5)               /* 刚度 */
 #elif ADM_PRESET == 2
 #define ADM_M               (1.52e-6f)
 #define ADM_B               (1.91e-5f)
@@ -136,7 +136,74 @@
 #define ADM_SELFTEST_MS     (2000u)
 
 /* =====================================================================
- *  四、对外接口
+ *  四、力控模式（2026-11-04，导师要求：给力矩指令，看稳态误差）
+ *
+ *  零力顺应是"力进、位置出"；力控是"力误差进、位置出"。
+ *  两者共用同一个执行器（PP 位置流），区别只在 K 项：
+ *      K != 0 : 稳态 K*x = tau_cmd - tau_ext，出力由挡块位置决定 -> 不可控
+ *      K == 0 : 稳态 tau_ext = tau_cmd，出力就是指令
+ *  所以力控必须把 K 置 0（M/B 也一并旁路），只留一个积分器：
+ *      pos_cmd = pos_ref + Ki_pos * INT(tau_cmd - tau_ext) dt
+ *
+ *  为什么 K 必须去掉：K 是"位置回正弹簧"，顶住挡块时它把位置拉回参考，
+ *  力误差被位置偏移吸收。同一个 1.0 N.m 指令，挡块位置不同出力能差 3 倍
+ *  （见《导纳控制调参记录.md》第 13 节）。加积分也救不了：K 和积分在
+ *  同一回路里会形成慢振荡。
+ *
+ *  APP_JOINT_FC = 0 时整段力控不参与编译，行为回到清理后的零力顺应版本
+ *  （只多一个 KEY1 转发函数，Code 约 +160 B）。
+ * ===================================================================== */
+
+#define APP_JOINT_FC        (1u)        /* 1 = 力控模式，0 = 零力顺应 */
+
+#if (APP_JOINT_FC != 0u)
+
+/* 命名规则：FC_ = force control；单位后缀 _CNT = counts、_MS = 毫秒，
+ * 力矩类不加后缀，统一 N.m（与 tau_ext / ADM_TAU_STOP 保持一致）。 */
+
+/* 位置积分增益 [counts/(N.m*s)]：1 N.m 误差 -> 每秒挪 2000 counts = 1.37 deg */
+#define FC_KI_POS           (2000.0f)
+
+/* 积分器绝对上限 [counts]：42.6 deg。软限位 45deg(65536) 前留 3500 counts。
+ *
+ * 2026-11-07 实测教训：原来给 3000(2.06deg)，是把"接触后余量"当成了全部行程。
+ * 实际手臂要先走完自由行程才碰得到挡块，3000 全被自由行程吃掉，
+ * 日志里 pos_cmd 一涨到 214254(=211254+3000) 就彻底冻结 5.8 s，
+ * F_cmd 从 0.5 加到 1.0 一动不动。**行程预算必须包含自由行程。**
+ *
+ * 2026-11-07 第二次放大：30000(20.6deg) 也只有半个机械行程，挡块摆远一点
+ * 就够不到。现在顶到软限位下面，等于"力控能跑到机械能到的地方"。 */
+#define FC_DELTA_MAX        (62000.0f)
+
+/* 越界窗口 [counts]：2.75 deg。指令已比实际超前这么多，停止同向推进 */
+#define FC_DEV_WIN          (4000.0f)
+
+/* 力矩保护 [N.m]：目标是 0.3~1.5，超过 3 说明失控（兜底，不是工作点） */
+#define FC_TAU_MAX          (3.0f)
+
+/* "找不到挡块"判据 [counts]：位移超过 41.2 deg 还读不到力 -> 停机。
+ * 力控在自由空间里积分器只会一直爬，没有挡块就永远到不了目标力。
+ * 阈值跟着 FC_DELTA_MAX 走，留 2000 counts 让它在打到软限位前先报错，
+ * 别让"钳在软限位上不出力"这种无声卡死重现。 */
+#define FC_NO_CT_CNT        (60000.0f)
+
+/* "找不到挡块"判据 [N.m]：位移超限时，实测力低于这个值就算没顶到 */
+#define FC_NO_CT_TAU        (0.10f)
+
+/* KEY1 力矩档位数。第 0 档必须是 0，启动默认不加力 */
+#define FC_CMD_NUM          (5u)
+
+/* 运行期打印周期 [ms]。力环建立 0.5~1 s，200 ms 够看趋势 */
+#define FC_PRINT_MS         (200u)
+
+/* 运行期力矩保护阈值：力控用 3 N.m（目标 0.3~1.5），零力顺应仍用 20 */
+#define ADM_TAU_LIMIT       (FC_TAU_MAX)
+#else
+#define ADM_TAU_LIMIT       (ADM_TAU_STOP)
+#endif
+
+/* =====================================================================
+ *  五、对外接口
  * ===================================================================== */
 
 float App_Joint_GetGravityTorque(int32_t pos);      /* 重力矩 tau_g(th) */
@@ -148,6 +215,9 @@ void    App_Joint_Adm_Stop(void);
 void    App_Joint_Adm_StopKey(void);                /* 停机并标记原因=按键 */
 void    App_Joint_Adm_Task(void);
 uint8_t App_Joint_Adm_IsBusy(void);
+
+/* KEY1 统一入口：力控模式切 F_cmd，零力顺应模式切增益档 */
+void  App_Joint_Adm_Key1(void);
 
 /* 增益档位：三档 wn/zeta 不变，只改 K（45 deg 处的力矩跟着变） */
 uint8_t App_Joint_Adm_CycleGain(void);              /* 切下一档，返回 1..3 */

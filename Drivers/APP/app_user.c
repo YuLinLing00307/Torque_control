@@ -69,12 +69,12 @@ void App_Key_Task(void)
 		}
 	}
 
-	/* KEY1：循环切换导纳增益档（中 → 软 → 硬），用于 A/B 对比手感。
-	 * 三档 ωn、ζ 都不变，只改 K，所以切的就是"推起来多硬"。
-	 * 运行中也能切：位置连续、力矩有阶跃，手感差异最明显。 */
+	/* KEY1：力控模式切 F_cmd（0 -> 0.3 -> 0.5 -> 1.0 -> 1.5 N.m 循环），
+	 * 零力顺应模式切导纳增益档（中 → 软 → 硬）。
+	 * 具体走哪条在 App_Joint_Adm_Key1 里按 APP_JOINT_FC 分。 */
 	if (key_down == 2)
 	{
-		App_Joint_Adm_CycleGain();
+		App_Joint_Adm_Key1();
 	}
 
 	/* LED1 常亮 = 有东西在跑 */

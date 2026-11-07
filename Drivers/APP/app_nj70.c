@@ -1,8 +1,33 @@
 #include "app_nj70.h"
 #include "app_joint.h"
 
+/* =====================================================================
+ *  采样周期与低通系数（两者是耦合的，不能单独改）
+ *
+ *  一阶 IIR:  y = a*x + (1-a)*y
+ *  时间常数  tau = -T / ln(1-a)        T = 采样周期
+ *  截止频率  fc  = 1 / (2*pi*tau)
+ *
+ *  NJ70_LPF_ALPHA = 0.7 时：
+ *      T = 50 ms  ->  tau = 41.5 ms,  fc = 3.8 Hz   <- 原配置
+ *      T = 10 ms  ->  tau =  8.3 ms,  fc = 19 Hz    <- 延迟少 33 ms
+ *  也就是说：周期从 50 改 10 时，若 alpha 不动，滤波会跟着变宽 5 倍。
+ *  想保持原滤波特性必须同时降 alpha（见下表），但那等于放弃了减延迟：
+ *      T = 10 ms / a = 0.21  ->  tau = 41.5 ms（等于没提速）
+ *      T = 10 ms / a = 0.50  ->  tau = 14.4 ms,  fc = 11 Hz
+ *
+ *  当前默认 NJ70_FAST = 0，编译结果与改动前逐字节一致。
+ * ===================================================================== */
+
+#define NJ70_FAST           0u      /* 1 = 100 Hz 采样（力控推荐），0 = 20 Hz */
+
+#if (NJ70_FAST != 0u)
+#define NJ70_PERIOD_MS      10u     /* 100 Hz 一问一答，往返 0.78 ms 够用 */
+#else
 #define NJ70_PERIOD_MS      50u     /* 20 Hz 一问一答 */
-#define NJ70_LPF_ALPHA      0.7f    /* 一阶低通系数，20 Hz 采样下截止约 2.5 Hz */
+#endif
+
+#define NJ70_LPF_ALPHA      0.7f    /* 一阶低通系数（tau 随 T 变，见上表） */
 
 uint8_t tx_buffer[MAX_TX_BUFFER_SIZE];
 uint8_t rx_buffer[MAX_RX_BUFFER_SIZE];
@@ -65,6 +90,7 @@ void App_NJ70_Task(void)
 	if (Dev_Joint_ReadPos(&pos))
 	{
 		torque_after_comp = torque - App_Joint_GetGravityTorque(pos);
+		//printf("%.2f\r\n",torque_after_comp);
 	}
 
 	memset(rx_buffer, 0, sizeof(rx_buffer));
